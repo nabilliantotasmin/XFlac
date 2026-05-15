@@ -1510,6 +1510,49 @@ class SodaProvider {
   /**
    * Download track using multiple APIs with fallback
    */
+  /**
+   * Returns the raw stream URL without downloading to disk.
+   * Used by /api/stream-url for direct in-browser playback.
+   */
+  async getStreamUrlOnly(trackId, quality = 'best') {
+    const fakeTrack = { id: trackId };
+    const errors = [];
+
+    for (const api of this.downloadAPIs) {
+      try {
+        const audioInfo = await withRetry(async () => {
+          const audios = await api.resolve(trackId, quality);
+          const selected = api.pickAudio(audios, quality);
+          if (!selected) throw new Error(`${api.name} returned no playable audio`);
+          return selected;
+        }, 2, 1000);
+
+        // Skip protected/DRM streams
+        const playAuth = audioInfo.PlayAuth || audioInfo.play_auth || '';
+        if (playAuth) {
+          errors.push(`${api.name}: protected stream`);
+          continue;
+        }
+
+        const url = audioInfo.MainPlayUrl || audioInfo.BackupPlayUrl;
+        if (!url) throw new Error(`${api.name} returned empty URL`);
+
+        const fmt = (audioInfo.Format || audioInfo.format || '').toLowerCase();
+        let format = 'mp3';
+        if (fmt.includes('flac')) format = 'flac';
+        else if (fmt.includes('m4a') || fmt.includes('aac') || fmt.includes('mp4')) format = 'm4a';
+        else if (fmt.includes('ogg')) format = 'ogg';
+
+        console.log(`[Soda] Stream URL resolved via ${api.name}: ${format}`);
+        return { url, format, encrypted: false };
+      } catch (err) {
+        errors.push(`${api.name}: ${err.message}`);
+      }
+    }
+
+    throw new Error(`All Soda stream APIs failed: ${errors.join('; ')}`);
+  }
+
   async download(track, quality, outputPath, onProgress) {
     if (!track || !track.id) throw new Error('Invalid Soda track');
     onProgress?.(5);

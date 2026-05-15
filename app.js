@@ -262,7 +262,9 @@
 
   // ─── DIRECT STREAMING (tanpa download ke disk) ───────────────────────────
   // Memanggil /api/stream-url → dapat proxyUrl → langsung diputar di player.
-  // Tidak ada file yang disimpan; user bisa menekan tombol "Simpan" jika mau.
+  // Tidak ada file yang disimpan ke disk sama sekali.
+  // Semua 7 provider (deezer, qobuz, amazon, tidal, pandora, soda, netease)
+  // sudah mengimplementasikan getStreamUrlOnly di server.
   async function streamDirect(track) {
     if (!track) return;
     const prov = providersData.find(p => p.key === currentProvider);
@@ -271,13 +273,6 @@
     // Tampilkan player dengan status loading
     setPlayerLoading(track, 'Memuat stream...');
 
-    // All 7 providers support getStreamUrlOnly — direct streaming enabled
-    const STREAM_SUPPORTED = ['deezer', 'qobuz', 'amazon', 'tidal', 'pandora', 'soda', 'netease'];
-    if (!STREAM_SUPPORTED.includes(currentProvider)) {
-      setPlayerLoading(track, 'Mempersiapkan stream...');
-      return downloadAndPlay(track);
-    }
-
     try {
       const res = await fetch(
         `/api/stream-url?provider=${encodeURIComponent(currentProvider)}&id=${encodeURIComponent(track.id)}&quality=${encodeURIComponent(quality)}`
@@ -285,26 +280,24 @@
       const data = await res.json();
 
       if (data.error) {
-        // Fallback ke download-then-play jika stream URL gagal
-        console.warn('[streamDirect] stream-url failed, falling back to download:', data.error);
-        setPlayerLoading(track, 'Mempersiapkan stream...');
-        return downloadAndPlay(track);
+        console.error('[streamDirect] stream-url error:', data.error);
+        setPlayerLoading(track, `Stream gagal: ${data.error}`);
+        return;
       }
 
-      // Langsung putar lewat proxy — tidak ada file yang disimpan
+      // Langsung putar lewat proxy — tidak ada file yang disimpan ke disk
       playStream({
         title:       track.title,
         artist:      track.artist,
         cover:       track.cover || '',
-        streamUrl:   data.proxyUrl,          // /api/proxy-stream?t=...
-        downloadUrl: null,                   // belum didownload
+        streamUrl:   data.proxyUrl,   // /api/proxy-stream?t=...
+        downloadUrl: null,
         fileName:    `${track.artist} - ${track.title}`
       });
 
     } catch (err) {
-      console.warn('[streamDirect] error, falling back:', err.message);
-      setPlayerLoading(track, 'Mempersiapkan stream...');
-      downloadAndPlay(track);
+      console.error('[streamDirect] network error:', err.message);
+      setPlayerLoading(track, `Stream gagal: ${err.message}`);
     }
   }
   // ─────────────────────────────────────────────────────────────────────────

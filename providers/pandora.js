@@ -336,6 +336,50 @@ class PandoraProvider {
     return pandoraID;
   }
 
+  /**
+   * Returns the raw stream URL without downloading to disk.
+   * Used by /api/stream-url for direct in-browser playback.
+   */
+  async getStreamUrlOnly(trackId, quality = 'mp3_192') {
+    const fakeTrack = { id: trackId };
+
+    // Resolve Pandora ID (same as download flow)
+    let pandoraID;
+    try {
+      const resolvedTrack = await resolvePandoraTrack(fakeTrack.id);
+      pandoraID = resolvedTrack.pandoraID;
+    } catch {
+      pandoraID = await this.resolveToPandoraID(fakeTrack);
+    }
+
+    const pandoraURL = normalizeSecureURL(buildPandoraURL(pandoraID));
+
+    const payloadRes = await httpPost(CONFIG.apiBaseURL + CONFIG.downloadPath, {
+      url: pandoraURL
+    });
+
+    if (!payloadRes.ok) {
+      throw new Error('Pandora API request failed: HTTP ' + payloadRes.statusCode);
+    }
+
+    const payload = payloadRes.json();
+    if (!payload || payload.success !== true) {
+      throw new Error(payload?.error?.message || 'Pandora API request failed');
+    }
+
+    const selectedLink = selectQualityLink(payload, quality);
+    if (!selectedLink || !selectedLink.url) {
+      throw new Error('No streamable Pandora URL available');
+    }
+
+    const encoding = String(selectedLink.encoding || '').toLowerCase();
+    let format = 'mp3';
+    if (encoding.includes('aac') || /\.m4a/i.test(selectedLink.url)) format = 'm4a';
+
+    console.log(`[Pandora] Stream URL resolved for ${pandoraID}: ${format}`);
+    return { url: selectedLink.url, format, encrypted: false };
+  }
+
   async download(track, quality, outputPath, onProgress) {
     let pandoraID;
     let resolvedTrack = null;

@@ -1032,6 +1032,29 @@ class NetEaseProvider {
   // DOWNLOAD METHOD (Enhanced with 15 API fallback)
   // ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Returns the raw stream URL without downloading to disk.
+   * Used by /api/stream-url for direct in-browser playback.
+   */
+  async getStreamUrlOnly(trackId, quality = 'exhigh') {
+    const id = String(trackId || '').trim();
+    if (!id) throw new Error('Missing NetEase track ID');
+
+    const { url, source } = await getDownloadUrlWithFallback(id, quality);
+    if (!url) throw new Error('No playable NetEase URL found. Track may be VIP-only or region-locked.');
+
+    console.log(`[NetEase] Stream URL resolved via ${source}`);
+
+    // Detect format from URL
+    const u = url.toLowerCase().split('?')[0];
+    let format = 'mp3';
+    if (u.endsWith('.flac')) format = 'flac';
+    else if (u.endsWith('.m4a') || u.endsWith('.mp4')) format = 'm4a';
+    else if (u.endsWith('.ogg')) format = 'ogg';
+
+    return { url, format, encrypted: false };
+  }
+
   async download(track, quality = 'exhigh', outputPath, onProgress) {
     const id = String(track.id || '').trim();
     if (!id) throw new Error('Missing NetEase track ID');

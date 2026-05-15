@@ -928,6 +928,45 @@ class TidalProvider {
     }));
   }
 
+  /**
+   * Returns the raw stream URL without downloading to disk.
+   * Used by /api/stream-url for direct in-browser playback.
+   */
+  async getStreamUrlOnly(trackId, quality = 'LOSSLESS') {
+    await this.init();
+
+    let tidalUrl;
+    if (String(trackId).startsWith('tidal_')) {
+      tidalUrl = `https://listen.tidal.com/track/${trackId.replace('tidal_', '')}`;
+    } else {
+      // trackId is already a raw Tidal numeric ID (from album track listing)
+      tidalUrl = `https://listen.tidal.com/track/${trackId}`;
+    }
+
+    const id = this._parseTrackId(tidalUrl);
+    const dlUrl = await this._getDownloadUrlWithFallback(id, quality || 'LOSSLESS');
+
+    // _getDownloadUrlWithFallback may return a MANIFEST: prefixed string for HLS/DASH
+    // For streaming we only support direct URLs; manifests need download+remux
+    if (dlUrl.startsWith('MANIFEST:')) {
+      try {
+        const result = parseManifest(dlUrl.slice(9));
+        if (result.direct_url) {
+          const fmt = (result.mime_type || '').toLowerCase().includes('flac') ? 'flac' : 'm4a';
+          return { url: result.direct_url, format: fmt, encrypted: false };
+        }
+      } catch {}
+      throw new Error('Tidal returned a segmented manifest — direct streaming not supported for this track');
+    }
+
+    // Direct URL (FLAC / AAC)
+    const u = dlUrl.toLowerCase().split('?')[0];
+    let format = 'flac';
+    if (u.endsWith('.m4a') || u.endsWith('.mp4') || u.includes('aac')) format = 'm4a';
+
+    return { url: dlUrl, format, encrypted: false };
+  }
+
   async download(track, quality, outputPath, onProgress) {
     await this.init();
 
