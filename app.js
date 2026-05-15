@@ -8,7 +8,7 @@
 
   // ─── STATE ───
   let currentProvider = '';
-  let currentPlatform = 'jiosaavn';
+  let currentPlatform = 'soundcloud';
   let providersData = [];
   let selectedTracks = new Map();
   let currentAlbumTracks = [];
@@ -265,8 +265,8 @@
   // ─── DIRECT STREAMING ────────────────────────────────────────────────────
   // Provider yang mendukung stream langsung (tanpa download ke disk).
   // Tidal, Deezer, Amazon TIDAK support — harus download dulu baru play.
-  // JioSaavn SUPPORT getStreamUrlOnly → masuk stream direct.
-  const STREAM_DIRECT_PROVIDERS = new Set(['qobuz', 'pandora', 'jiosaavn']);
+  // SoundCloud SUPPORT getStreamUrlOnly → masuk stream direct.
+  const STREAM_DIRECT_PROVIDERS = new Set(['qobuz', 'pandora', 'soundcloud']);
 
   function canStreamDirect() {
     return STREAM_DIRECT_PROVIDERS.has(currentProvider);
@@ -766,8 +766,9 @@
     hide(els.downloadComplete);
     show(els.startDownloadBtn);
     // Tombol "Stream Langsung" tidak ditampilkan di modal — stream langsung
-    // tersedia via tombol play di card (qobuz/pandora/jiosaavn),
-    // sedangkan deezer/tidal/amazon harus download dulu via tombol play di card.
+    // tersedia via tombol play di card (qobuz/pandora/soundcloud),
+    // sedangkan deezer/tidal/amazon/bandcamp/applemusic/joox/yandexmusic
+    // harus download dulu via tombol play di card.
     if (els.streamNowBtn) hide(els.streamNowBtn);
     completedDownload = null;
     if (els.playNowBtn) els.playNowBtn.disabled = true;

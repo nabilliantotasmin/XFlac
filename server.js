@@ -25,12 +25,16 @@ function safeRequire(p) {
 }
 
 const providers = {
-  deezer: safeRequire(path.join(PROVIDERS_DIR, 'deezer')),
-  qobuz: safeRequire(path.join(PROVIDERS_DIR, 'qobuz')),
-  amazon: safeRequire(path.join(PROVIDERS_DIR, 'amazon')),
-  tidal: safeRequire(path.join(PROVIDERS_DIR, 'tidal')),
-  pandora: safeRequire(path.join(PROVIDERS_DIR, 'pandora')),
-  jiosaavn: safeRequire(path.join(PROVIDERS_DIR, 'jiosaavn'))
+  deezer:      safeRequire(path.join(PROVIDERS_DIR, 'deezer')),
+  qobuz:       safeRequire(path.join(PROVIDERS_DIR, 'qobuz')),
+  amazon:      safeRequire(path.join(PROVIDERS_DIR, 'amazon')),
+  tidal:       safeRequire(path.join(PROVIDERS_DIR, 'tidal')),
+  pandora:     safeRequire(path.join(PROVIDERS_DIR, 'pandora')),
+  soundcloud:  safeRequire(path.join(PROVIDERS_DIR, 'soundcloud')),
+  bandcamp:    safeRequire(path.join(PROVIDERS_DIR, 'bandcamp')),
+  applemusic:  safeRequire(path.join(PROVIDERS_DIR, 'applemusic')),
+  joox:        safeRequire(path.join(PROVIDERS_DIR, 'joox')),
+  yandexmusic: safeRequire(path.join(PROVIDERS_DIR, 'yandexmusic'))
 };
 
 let tagFile = null;
@@ -308,22 +312,20 @@ function stdTrack(t, source) {
       isrc: t.isrc || ''
     };
   }
-  if (source === 'jiosaavn') {
-    return {
-      id:        String(t.id),
-      title:     t.title    || 'Unknown',
-      artist:    t.artist   || 'Unknown',
-      album:     t.album    || '',
-      albumId:   t.albumId  || '',
-      cover:     t.cover    || '',
-      duration:  t.duration || 0,
-      isrc:      t.isrc     || '',
-      language:  t.language || '',
-      _audioUrl: t._audioUrl || ''
-    };
-  }
-
-  return t;
+  // Default passthrough untuk provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
+  return {
+    id:       String(t.id     || ''),
+    title:    t.title         || 'Unknown',
+    artist:   t.artist        || extractArtist(t) || 'Unknown',
+    album:    t.album         || '',
+    cover:    t.cover         || '',
+    duration: t.duration      || 0,
+    isrc:     t.isrc          || '',
+    // Pertahankan field khusus provider (misalnya _audioUrl, _appleUrl, dll.)
+    ...Object.fromEntries(
+      Object.entries(t).filter(([k]) => k.startsWith('_'))
+    )
+  };
 }
 
 // ─── ARTIST SEARCH PER PROVIDER ───
@@ -522,12 +524,16 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/providers' && m === 'GET') {
       const list = [
-        { key: 'deezer',  name: 'Deezer',       icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
-        { key: 'qobuz',  name: 'Qobuz',        icon: '💿', qualities: [{name:'27 (Hi-Res Max)',value:'27'},{name:'7 (Hi-Res)',value:'7'},{name:'6 (CD)',value:'6'}] },
-        { key: 'amazon', name: 'Amazon',        icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
-        { key: 'tidal',  name: 'Tidal',         icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
-        { key: 'pandora',name: 'Pandora',       icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] },
-        { key: 'jiosaavn', name: 'JioSaavn',     icon: '🎵', qualities: [{name:'320kbps',value:'320'},{name:'160kbps',value:'160'},{name:'96kbps',value:'96'},{name:'48kbps',value:'48'}] }
+        { key: 'deezer',      name: 'Deezer',        icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
+        { key: 'qobuz',      name: 'Qobuz',         icon: '💿', qualities: [{name:'27 (Hi-Res Max)',value:'27'},{name:'7 (Hi-Res)',value:'7'},{name:'6 (CD)',value:'6'}] },
+        { key: 'amazon',     name: 'Amazon',         icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
+        { key: 'tidal',      name: 'Tidal',          icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
+        { key: 'pandora',    name: 'Pandora',        icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] },
+        { key: 'soundcloud', name: 'SoundCloud',     icon: '🔊', qualities: [{name:'MP3 128kbps',value:'mp3'},{name:'Opus 64kbps',value:'opus'}] },
+        { key: 'bandcamp',   name: 'Bandcamp',       icon: '🎸', qualities: [{name:'Lossless (FLAC)',value:'lossless'},{name:'MP3 320kbps',value:'mp3_320'},{name:'MP3 V0',value:'mp3_v0'}] },
+        { key: 'applemusic', name: 'Apple Music',    icon: '🍎', qualities: [{name:'AAC 256kbps',value:'aac_256'},{name:'AAC 128kbps',value:'aac_128'}] },
+        { key: 'joox',       name: 'JOOX',           icon: '🎶', qualities: [{name:'HQ (320kbps)',value:'hq'},{name:'Standard',value:'standard'}] },
+        { key: 'yandexmusic',name: 'Yandex Music',   icon: '🎵', qualities: [{name:'Lossless',value:'lossless'},{name:'High (320kbps)',value:'high'},{name:'Standard',value:'standard'}] }
       ].filter(item => providers[item.key]);
       return json(res, { providers: list });
     }
@@ -615,8 +621,14 @@ const server = http.createServer(async (req, res) => {
           case 'pandora':
             // Pandora does not support artist search via API
             return json(res, { artists: [] });
-          case 'jiosaavn':
-            artists = await providers.jiosaavn.searchArtist(q, limit);
+          default:
+            // Provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
+            // semua memiliki method searchArtist() di kelasnya masing-masing
+            if (providers[prov] && typeof providers[prov].searchArtist === 'function') {
+              artists = await providers[prov].searchArtist(q, limit);
+            } else {
+              return json(res, { artists: [] });
+            }
             break;
         }
       } catch (err) {
@@ -649,11 +661,14 @@ const server = http.createServer(async (req, res) => {
             break;
           case 'pandora':
             return json(res, { error: 'Artist profile not supported for Pandora' }, 400);
-          case 'jiosaavn':
-            result = await providers.jiosaavn.getArtist(id);
-            break;
           default:
-            return json(res, { error: 'Artist profile not supported for this provider' }, 400);
+            // Provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
+            if (providers[prov] && typeof providers[prov].getArtist === 'function') {
+              result = await providers[prov].getArtist(id);
+            } else {
+              return json(res, { error: 'Artist profile not supported for this provider' }, 400);
+            }
+            break;
         }
       } catch (err) {
         console.error(`[artist] ${prov} error:`, err.message);
@@ -685,11 +700,14 @@ const server = http.createServer(async (req, res) => {
             break;
           case 'pandora':
             return json(res, { error: 'Album browsing not supported for Pandora' }, 400);
-          case 'jiosaavn':
-            result = await providers.jiosaavn.getAlbum(id);
-            break;
           default:
-            return json(res, { error: 'Album not supported for this provider' }, 400);
+            // Provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
+            if (providers[prov] && typeof providers[prov].getAlbum === 'function') {
+              result = await providers[prov].getAlbum(id);
+            } else {
+              return json(res, { error: 'Album not supported for this provider' }, 400);
+            }
+            break;
         }
       } catch (err) {
         console.error(`[album] ${prov} error:`, err.message);
@@ -1059,9 +1077,13 @@ server.listen(PORT, () => {
   console.log(`📁 Downloads folder: ${DL_DIR}`);
   console.log(`▶️  Streaming endpoint: /stream/<fileName>`);
   console.log(`🏷️  Metadata tagging: ${tagFile ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`👤 Artist search: ENABLED for Deezer, Qobuz, Tidal, Amazon, Kuwo Music`);
-  console.log(`📻 Pandora provider: ${providers.pandora ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🎵 JioSaavn provider: ${providers.jiosaavn ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`👤 Artist search: ENABLED for Deezer, Qobuz, Tidal, Amazon, SoundCloud, Bandcamp, Apple Music, JOOX, Yandex Music`);
+  console.log(`📻 Pandora provider: ${providers.pandora     ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🔊 SoundCloud:      ${providers.soundcloud  ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🎸 Bandcamp:        ${providers.bandcamp    ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🍎 Apple Music:     ${providers.applemusic  ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🎶 JOOX:            ${providers.joox        ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🎵 Yandex Music:    ${providers.yandexmusic ? 'LOADED' : 'NOT FOUND'}`);
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`
