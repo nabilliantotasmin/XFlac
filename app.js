@@ -284,46 +284,65 @@
     el.artistGrid.innerHTML = `<div class="spinner-inline"><div class="bounce1"></div><div class="bounce2"></div><div class="bounce3"></div></div>`;
     el.searchBtn.disabled = true;
 
-    // Try providers in order that support artist search
-    const artistProviders = ['deezer', 'qobuz', 'tidal', 'amazon'];
-    let artists = [];
-    let usedProv = 'deezer';
+    try {
+      const r = await fetch(`/api/unified-search-artist?q=${encodeURIComponent(q)}&limit=20`);
+      const d = await r.json();
 
-    for (const prov of artistProviders) {
-      try {
-        const r = await fetch(`/api/search-artist?provider=${prov}&q=${encodeURIComponent(q)}&limit=16`);
-        const d = await r.json();
-        if (!d.error && d.artists?.length) {
-          artists  = d.artists;
-          usedProv = prov;
-          break;
-        }
-      } catch {}
-    }
+      el.searchBtn.disabled = false;
 
-    el.searchBtn.disabled = false;
+      if (d.error) throw new Error(d.error);
 
-    if (!artists.length) {
-      el.artistGrid.innerHTML = `<div class="no-results">
-        <i class="fas fa-user-slash"></i>
-        <p>Tidak ada artist ditemukan untuk "<strong>${esc(q)}</strong>"</p>
+      const artists = d.artists || [];
+      const errors  = Object.keys(d.providerErrors || {}).length;
+
+      if (!artists.length) {
+        el.artistGrid.innerHTML = `<div class="no-results">
+          <i class="fas fa-user-slash"></i>
+          <p>Tidak ada artist ditemukan untuk "<strong>${esc(q)}</strong>"</p>
+        </div>`;
+        el.artistMeta.textContent = '0 artists found';
+        return;
+      }
+
+      el.artistMeta.textContent = `${artists.length} artists · ${4 - errors}/4 providers`;
+      renderArtistCards(artists);
+
+    } catch (err) {
+      el.searchBtn.disabled = false;
+      el.artistGrid.innerHTML = `<div class="no-results error">
+        <i class="fas fa-exclamation-circle"></i>
+        <p>Search gagal: ${esc(err.message)}</p>
       </div>`;
-      el.artistMeta.textContent = '0 artists found';
-      return;
+      el.artistMeta.textContent = 'error';
     }
-
-    currentArtistProv = usedProv;
-    el.artistMeta.textContent = `${artists.length} artists · via ${usedProv}`;
-    renderArtistCards(artists, usedProv);
   }
 
-  function renderArtistCards(artists, prov) {
+  function renderArtistCards(artists) {
     el.artistGrid.innerHTML = '';
     artists.forEach(a => {
+      // provider chips — yang ditemukan di berapa banyak provider
+      const provChips = (a.providers || []).map(p => {
+        const meta = providersData.find(pd => pd.key === p.key);
+        return meta
+          ? `<span class="chip" title="${meta.name}">${meta.icon}</span>`
+          : `<span class="chip">${p.key}</span>`;
+      }).join('');
+
+      // Best provider to use for artist profile (deezer preferred for rich data)
+      const PROFILE_PROV_PRIORITY = ['deezer', 'qobuz', 'tidal', 'amazon'];
+      const bestProvEntry = a.providers?.find(p => PROFILE_PROV_PRIORITY[0] === p.key)
+        || a.providers?.find(p => PROFILE_PROV_PRIORITY[1] === p.key)
+        || a.providers?.find(p => PROFILE_PROV_PRIORITY[2] === p.key)
+        || a.providers?.find(p => PROFILE_PROV_PRIORITY[3] === p.key)
+        || a.providers?.[0];
+
+      const profileProv   = bestProvEntry?.key || 'deezer';
+      const profileArtistId = bestProvEntry?.artistId || a.id;
+
       const card = document.createElement('div');
       card.className = 'artist-card glass-panel';
       card.innerHTML = `
-        <img class="artist-card-img" src="${a.picture || ''}" alt="${esc(a.name)}"
+        <img class="artist-card-img" src="${esc(a.picture || '')}" alt="${esc(a.name)}"
              onerror="this.src=''; this.classList.add('no-img')">
         <div class="artist-card-info">
           <div class="artist-card-name">${esc(a.name)}</div>
@@ -331,10 +350,11 @@
             ${a.albumsCount ? `<span><i class="fas fa-compact-disc"></i> ${a.albumsCount} albums</span>` : ''}
             ${a.fans        ? `<span><i class="fas fa-heart"></i> ${fmtNum(a.fans)} fans</span>`        : ''}
           </div>
+          ${provChips ? `<div class="artist-card-providers">${provChips}</div>` : ''}
           <div class="artist-card-cta">View Profile <i class="fas fa-arrow-right"></i></div>
         </div>
       `;
-      card.addEventListener('click', () => showArtistProfile(a.id, prov));
+      card.addEventListener('click', () => showArtistProfile(profileArtistId, profileProv));
       el.artistGrid.appendChild(card);
     });
   }
