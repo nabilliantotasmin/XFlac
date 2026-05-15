@@ -127,15 +127,6 @@ class QobuzProvider {
     }));
   }
 
-  /**
-   * Resolve a direct stream URL for a Qobuz track WITHOUT downloading.
-   * Returns the raw CDN URL string or throws.
-   */
-  async getStreamUrlOnly(trackId, quality = '6') {
-    const q = { 'HI_RES': '27', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
-    return this.getStreamUrl(trackId, q);
-  }
-
   async getStreamUrl(trackId, quality) {
     let lastError = null;
 
@@ -216,7 +207,8 @@ class QobuzProvider {
    * ─────────────────────────────────────────────────────────────────────────
    */
   async getStreamUrlOnly(trackId, quality = '6') {
-    const q = { 'HI_RES': '27', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
+    // Map quality labels → Qobuz format_id: 27 = Hi-Res Max, 7 = Hi-Res, 6 = CD Quality
+    const q = { 'HI_RES_MAX': '27', 'HI_RES': '7', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
     return this.getStreamUrl(trackId, q);
   }
 
@@ -226,9 +218,25 @@ class QobuzProvider {
    * ─────────────────────────────────────────────────────────────────────────
    */
   async download(track, quality, outputPath, onProgress) {
-    const q = { 'HI_RES': '27', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
+    // Map quality labels → Qobuz format_id: 27 = Hi-Res Max, 7 = Hi-Res, 6 = CD Quality
+    const q = { 'HI_RES_MAX': '27', 'HI_RES': '7', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
+
     const url = await this.getStreamUrl(track.id, q);
-    return this.downloadFile(url, outputPath, onProgress);
+
+    // Detect final extension from CDN URL (e.g. .flac, .mp3, .m4a)
+    // Qobuz streams are typically FLAC for quality 6/7/27
+    let ext = 'flac';
+    try {
+      const urlPath = new URL(url).pathname;
+      const match = urlPath.match(/\.([a-z0-9]{2,5})(?:\?|$)/i);
+      if (match) ext = match[1].toLowerCase();
+    } catch (_) {}
+
+    // Replace .tmp (or any placeholder ext) with detected extension
+    const finalPath = outputPath.replace(/\.[^.]+$/, '') + '.' + ext;
+
+    await this.downloadFile(url, finalPath, onProgress);
+    return finalPath;
   }
 
   downloadFile(url, dest, onProgress) {
