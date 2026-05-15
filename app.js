@@ -83,10 +83,9 @@
     batchCurrentTrack: $('batch-current-track'),
     batchTrackList: $('batch-track-list'),
     batchComplete: $('batch-complete'),
-    batchCompleteMsg: $('batch-complete-msg')
+    batchCompleteMsg: $('batch-complete-msg'),
+    streamNowBtn: $('stream-now-btn')
   };
-
-  // ─── INIT ───
   async function init() {
     await loadProviders();
     setupSearchModeToggle();
@@ -151,6 +150,12 @@
     els.refreshLibraryBtn?.addEventListener('click', () => loadLibrary(true));
     els.playerClose?.addEventListener('click', closePlayer);
     els.playNowBtn?.addEventListener('click', playCompletedDownload);
+    // Stream langsung dari modal tanpa download
+    els.streamNowBtn?.addEventListener('click', () => {
+      if (!currentTrack) return;
+      closeDownloadModal();
+      streamDirect(currentTrack);
+    });
   }
 
   function handleProviderChange() {
@@ -254,6 +259,55 @@
     if (!completedDownload) return;
     playStream(completedDownload);
   }
+
+  // ─── DIRECT STREAMING (tanpa download ke disk) ───────────────────────────
+  // Memanggil /api/stream-url → dapat proxyUrl → langsung diputar di player.
+  // Tidak ada file yang disimpan; user bisa menekan tombol "Simpan" jika mau.
+  async function streamDirect(track) {
+    if (!track) return;
+    const prov = providersData.find(p => p.key === currentProvider);
+    const quality = els.qualitySelect?.value || prov?.qualities?.[0]?.value || '6';
+
+    // Tampilkan player dengan status loading
+    setPlayerLoading(track, 'Memuat stream...');
+
+    // Providers yang belum support getStreamUrlOnly di server — fallback ke downloadAndPlay
+    const STREAM_SUPPORTED = ['deezer', 'qobuz', 'amazon'];
+    if (!STREAM_SUPPORTED.includes(currentProvider)) {
+      setPlayerLoading(track, 'Mempersiapkan stream...');
+      return downloadAndPlay(track);
+    }
+
+    try {
+      const res = await fetch(
+        `/api/stream-url?provider=${encodeURIComponent(currentProvider)}&id=${encodeURIComponent(track.id)}&quality=${encodeURIComponent(quality)}`
+      );
+      const data = await res.json();
+
+      if (data.error) {
+        // Fallback ke download-then-play jika stream URL gagal
+        console.warn('[streamDirect] stream-url failed, falling back to download:', data.error);
+        setPlayerLoading(track, 'Mempersiapkan stream...');
+        return downloadAndPlay(track);
+      }
+
+      // Langsung putar lewat proxy — tidak ada file yang disimpan
+      playStream({
+        title:       track.title,
+        artist:      track.artist,
+        cover:       track.cover || '',
+        streamUrl:   data.proxyUrl,          // /api/proxy-stream?t=...
+        downloadUrl: null,                   // belum didownload
+        fileName:    `${track.artist} - ${track.title}`
+      });
+
+    } catch (err) {
+      console.warn('[streamDirect] error, falling back:', err.message);
+      setPlayerLoading(track, 'Mempersiapkan stream...');
+      downloadAndPlay(track);
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   async function downloadAndPlay(track) {
     if (!track) return;
@@ -548,15 +602,15 @@
             <div class="track-item-artist">${esc(t.artist)}</div>
           </div>
           <span class="track-item-duration">${fmtDur(t.duration)}</span>
-          <button class="track-item-play" title="Play / stream"><i class="fas fa-play"></i></button>
+          <button class="track-item-stream" title="Stream langsung"><i class="fas fa-bolt"></i></button>
           <button class="track-item-download" title="Download"><i class="fas fa-download"></i></button>
         `;
 
         const cb = row.querySelector('.track-item-checkbox');
         cb.addEventListener('change', (e) => { e.stopPropagation(); toggleTrack(t, cb.checked); });
 
-        const play = row.querySelector('.track-item-play');
-        play.addEventListener('click', (e) => { e.stopPropagation(); downloadAndPlay(t); });
+        const streamBtn = row.querySelector('.track-item-stream');
+        streamBtn.addEventListener('click', (e) => { e.stopPropagation(); streamDirect(t); });
 
         const dl = row.querySelector('.track-item-download');
         dl.addEventListener('click', (e) => { e.stopPropagation(); openDownloadModal(t); });
@@ -651,12 +705,12 @@
           <div class="track-artist">${esc(t.artist)} · ${fmtDur(t.duration)}</div>
         </div>
         <div class="track-card-actions">
-          <button class="track-card-play" type="button" title="Play / stream"><i class="fas fa-play"></i></button>
+          <button class="track-card-stream" type="button" title="Stream langsung (tanpa download)"><i class="fas fa-bolt"></i></button>
           <button class="track-card-download" type="button" title="Download"><i class="fas fa-download"></i></button>
         </div>
       `;
       card.addEventListener('click', () => openDownloadModal(t));
-      card.querySelector('.track-card-play').addEventListener('click', (e) => { e.stopPropagation(); downloadAndPlay(t); });
+      card.querySelector('.track-card-stream').addEventListener('click', (e) => { e.stopPropagation(); streamDirect(t); });
       card.querySelector('.track-card-download').addEventListener('click', (e) => { e.stopPropagation(); openDownloadModal(t); });
       els.resultsGrid.appendChild(card);
     });
@@ -682,6 +736,7 @@
     hide(els.progressContainer);
     hide(els.downloadComplete);
     show(els.startDownloadBtn);
+    if (els.streamNowBtn) show(els.streamNowBtn);
     completedDownload = null;
     if (els.playNowBtn) els.playNowBtn.disabled = true;
 
@@ -709,6 +764,7 @@
   function closeDownloadModal() {
     hide(els.downloadModal);
     clearInterval(downloadPoll);
+    if (els.streamNowBtn) show(els.streamNowBtn);
     const modalInfo = els.downloadModal.querySelector('.modal-info');
     const oldMeta = modalInfo.querySelector('.modal-meta-extra');
     if (oldMeta) oldMeta.remove();
