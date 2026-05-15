@@ -3,248 +3,171 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Xenoflac - Premium Music Downloader</title>
-    <meta name="description" content="Download high-fidelity music across multiple providers.">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
+    <title>XenoFlac — Hi-Fi Music</title>
+    <meta name="description" content="Search and stream high-fidelity music across all providers.">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;800&family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-<base target="_blank">
 </head>
 <body>
-    <div class="background-elements">
+    <div class="bg-blobs">
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
     </div>
 
     <main class="app-container">
-        <header>
+
+        <!-- ── HEADER ── -->
+        <header class="app-header">
             <h1 class="logo">Xeno<span>flac</span></h1>
-            <p class="subtitle">High-Fidelity Music Downloader</p>
+            <p class="tagline">All providers. One search.</p>
         </header>
 
+        <!-- ── SEARCH BAR ── -->
         <section class="search-section glass-panel">
-            <form id="search-form" class="search-form">
-                <div class="input-group">
-                    <div class="select-wrapper">
-                        <select id="provider-select" aria-label="Select Provider">
-                            <option value="">Loading providers...</option>
-                        </select>
-                        <i class="fas fa-chevron-down select-icon"></i>
-                    </div>
-                </div>
-
-                <div class="input-group search-bar">
+            <form id="search-form" class="search-form" autocomplete="off">
+                <div class="search-input-wrap">
                     <i class="fas fa-search search-icon"></i>
-                    <input type="text" id="search-input" placeholder="Search for artists, tracks, or albums..." required>
-                    <button type="submit" id="search-btn" class="btn-primary">Search</button>
+                    <input
+                        type="text"
+                        id="search-input"
+                        placeholder="Search tracks, artists, albums…"
+                        required
+                        autofocus
+                    >
+                    <button type="submit" id="search-btn" class="btn-search">
+                        <i class="fas fa-search"></i>
+                        <span>Search</span>
+                    </button>
+                </div>
+                <div class="provider-badges" id="provider-badges">
+                    <!-- Injected by JS: 💿 Qobuz  🎧 Deezer  🌊 Tidal  📦 Amazon  📻 Pandora -->
                 </div>
             </form>
         </section>
 
-        <!-- Local Music Library / Streaming -->
+        <!-- ── LOCAL LIBRARY ── -->
         <section id="library-section" class="library-section glass-panel">
             <div class="library-header">
                 <div>
-                    <h2 class="section-title compact">Music Library</h2>
-                    <p class="library-subtitle">Play audio files from the downloads folder.</p>
+                    <h2 class="section-title compact">Downloaded Music</h2>
+                    <p class="library-subtitle">Tracks saved to this device.</p>
                 </div>
-                <button id="refresh-library-btn" class="btn-secondary" type="button">
-                    <i class="fas fa-rotate"></i> Refresh Library
+                <button id="refresh-library-btn" class="btn-ghost" type="button">
+                    <i class="fas fa-rotate"></i> Refresh
                 </button>
             </div>
-            <div id="library-list" class="library-list hidden">
-                <!-- Downloaded tracks injected here -->
-            </div>
+            <div id="library-list" class="library-list hidden"></div>
         </section>
 
-        <!-- Publisher Cards (shown in search results) -->
-        <section id="publisher-results-section" class="publisher-results-section hidden">
-            <h2 class="section-title">Publishers</h2>
-            <div id="publisher-results" class="publisher-results">
-                <!-- Publisher cards injected here -->
-            </div>
-        </section>
-
-        <!-- Track Search Results -->
+        <!-- ── SEARCH RESULTS ── -->
         <section id="results-section" class="results-section hidden">
-            <h2 class="section-title">Tracks</h2>
+            <!-- spinner -->
             <div id="loading-spinner" class="spinner hidden">
-                <div class="bounce1"></div>
-                <div class="bounce2"></div>
-                <div class="bounce3"></div>
+                <div class="bounce1"></div><div class="bounce2"></div><div class="bounce3"></div>
             </div>
-            <div id="results-grid" class="results-grid">
-                <!-- Results will be injected here -->
+            <!-- result count -->
+            <div id="results-header" class="results-header hidden">
+                <h2 class="section-title">Results</h2>
+                <span id="results-meta" class="results-meta"></span>
             </div>
+            <!-- grid -->
+            <div id="results-grid" class="results-grid"></div>
         </section>
 
-        <!-- Publisher Profile Page -->
-        <section id="publisher-profile" class="publisher-profile hidden">
-            <button id="profile-back-btn" class="back-btn">
-                <i class="fas fa-arrow-left"></i> Back to Search
-            </button>
-
-            <div class="profile-header glass-panel">
-                <img id="profile-picture" src="" alt="Publisher" class="profile-picture">
-                <div class="profile-info">
-                    <h2 id="profile-name" class="profile-name">Publisher Name</h2>
-                    <div class="profile-stats">
-                        <span id="profile-albums-count"><i class="fas fa-compact-disc"></i> 0 Albums</span>
-                        <span id="profile-fans-count"><i class="fas fa-heart"></i> 0 Fans</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="profile-albums-section">
-                <h3 class="albums-section-title">Discography</h3>
-                <div id="profile-albums-spinner" class="spinner hidden">
-                    <div class="bounce1"></div>
-                    <div class="bounce2"></div>
-                    <div class="bounce3"></div>
-                </div>
-                <div id="profile-albums-grid" class="albums-grid">
-                    <!-- Album cards injected here -->
-                </div>
-            </div>
-
-            <!-- Album Track List (shown when clicking an album) -->
-            <div id="album-tracks-section" class="album-tracks-section hidden">
-                <div class="album-detail-header glass-panel">
-                    <img id="album-detail-cover" src="" alt="Album Cover" class="album-detail-cover">
-                    <div class="album-detail-info">
-                        <h3 id="album-detail-title">Album Title</h3>
-                        <p id="album-detail-artist" class="album-detail-artist">Artist Name</p>
-                        <p id="album-detail-meta" class="album-detail-meta">0 tracks · 2024</p>
-                    </div>
-                </div>
-                <!-- Select toolbar -->
-                <div id="select-toolbar" class="select-toolbar">
-                    <label class="select-all-label">
-                        <input type="checkbox" id="select-all-checkbox">
-                        <span>Select All</span>
-                    </label>
-                    <span id="selected-count" class="selected-count">0 selected</span>
-                    <button id="download-selected-btn" class="btn-download-selected" disabled>
-                        <i class="fas fa-download"></i> Download Selected
-                    </button>
-                </div>
-                <div id="album-tracks-spinner" class="spinner hidden">
-                    <div class="bounce1"></div>
-                    <div class="bounce2"></div>
-                    <div class="bounce3"></div>
-                </div>
-                <div id="album-tracks-list" class="tracks-list">
-                    <!-- Track items injected here -->
-                </div>
-            </div>
-        </section>
-
-        <!-- Batch Download Modal -->
-        <div id="batch-modal" class="modal hidden">
-            <div class="modal-content glass-panel batch-modal-content">
-                <button id="batch-close-modal" class="close-btn"><i class="fas fa-times"></i></button>
-                <div class="batch-modal-header">
-                    <h3><i class="fas fa-layer-group"></i> Batch Download</h3>
-                    <p id="batch-overall-status" class="batch-overall-status">0 / 0 tracks</p>
-                </div>
-                <div class="modal-body">
-                    <div id="batch-quality-section" class="quality-selector">
-                        <label for="batch-quality-select">Select Quality:</label>
-                        <div class="select-wrapper inline">
-                            <select id="batch-quality-select"></select>
-                            <i class="fas fa-chevron-down select-icon"></i>
-                        </div>
-                    </div>
-                    <button id="batch-start-btn" class="btn-primary full-width">
-                        <i class="fas fa-download"></i> Start Batch Download
-                    </button>
-                    <div id="batch-progress-section" class="batch-progress-section hidden">
-                        <div class="batch-overall-bar">
-                            <div class="progress-header">
-                                <span id="batch-progress-label">Overall Progress</span>
-                                <span id="batch-progress-pct">0%</span>
-                            </div>
-                            <div class="progress-bar-bg">
-                                <div id="batch-progress-fill" class="progress-bar-fill"></div>
-                            </div>
-                        </div>
-                        <div id="batch-current-track" class="batch-current-track"></div>
-                        <div id="batch-track-list" class="batch-track-list"></div>
-                    </div>
-                    <div id="batch-complete" class="download-complete hidden">
-                        <i class="fas fa-check-circle success-icon"></i>
-                        <p id="batch-complete-msg">All downloads complete!</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Download Modal -->
-        <div id="download-modal" class="modal hidden">
-            <div class="modal-content glass-panel">
-                <button id="close-modal" class="close-btn"><i class="fas fa-times"></i></button>
-                <div class="modal-header">
-                    <img id="modal-cover" src="" alt="Album Cover" class="modal-cover hidden">
-                    <div class="modal-info">
-                        <h3 id="modal-title">Track Title</h3>
-                        <p id="modal-artist">Artist Name</p>
-                    </div>
-                </div>
-
-                <div class="modal-body">
-                    <div class="quality-selector">
-                        <label for="quality-select">Select Quality:</label>
-                        <div class="select-wrapper inline">
-                            <select id="quality-select"></select>
-                            <i class="fas fa-chevron-down select-icon"></i>
-                        </div>
-                    </div>
-
-                    <button id="start-download-btn" class="btn-primary full-width">
-                        <i class="fas fa-download"></i> Start Download
-                    </button>
-
-                    <button id="stream-now-btn" class="btn-stream full-width">
-                        <i class="fas fa-bolt"></i> Stream Langsung
-                    </button>
-
-                    <div id="progress-container" class="progress-container hidden">
-                        <div class="progress-header">
-                            <span id="progress-status">Initializing...</span>
-                            <span id="progress-percentage">0%</span>
-                        </div>
-                        <div class="progress-bar-bg">
-                            <div id="progress-bar-fill" class="progress-bar-fill"></div>
-                        </div>
-                    </div>
-
-                    <div id="download-complete" class="download-complete hidden">
-                        <i class="fas fa-check-circle success-icon"></i>
-                        <p>Download Complete!</p>
-                        <div class="complete-actions">
-                            <button id="play-now-btn" class="btn-primary" type="button">
-                                <i class="fas fa-play"></i> Play Now
-                            </button>
-                            <a id="download-link" href="#" class="btn-secondary" download>Save File</a>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
     </main>
 
-    <!-- Bottom audio player -->
+    <!-- ═══════════════════════════════════════════════
+         DOWNLOAD MODAL
+         Steps:
+           1. stream-step  — try Qobuz stream
+           2. provider-step — pick download provider
+           3. quality-step  — pick quality
+           4. progress-step — downloading
+           5. done-step     — finished
+    ═══════════════════════════════════════════════ -->
+    <div id="dl-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dl-modal-title">
+        <div class="modal-content glass-panel">
+            <button id="dl-close" class="close-btn" aria-label="Close"><i class="fas fa-times"></i></button>
+
+            <!-- Track info header -->
+            <div class="modal-header">
+                <img id="dl-cover" src="" alt="" class="modal-cover hidden">
+                <div class="modal-info">
+                    <h3 id="dl-modal-title" class="modal-title">Track Title</h3>
+                    <p id="dl-modal-artist" class="modal-artist">Artist</p>
+                    <p id="dl-modal-meta" class="modal-track-meta"></p>
+                </div>
+            </div>
+
+            <div class="modal-body">
+
+                <!-- STEP 1: streaming failed notice (hidden until needed) -->
+                <div id="stream-failed-notice" class="stream-failed-notice hidden">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span id="stream-failed-msg">Streaming via Qobuz tidak tersedia.</span>
+                </div>
+
+                <!-- STEP 2: provider picker -->
+                <div id="provider-step" class="modal-step hidden">
+                    <p class="step-label"><i class="fas fa-music"></i> Pilih provider download:</p>
+                    <div id="provider-picker" class="provider-picker"></div>
+                </div>
+
+                <!-- STEP 3: quality picker -->
+                <div id="quality-step" class="modal-step hidden">
+                    <p class="step-label"><i class="fas fa-sliders-h"></i> Pilih kualitas audio:</p>
+                    <div id="quality-picker" class="quality-picker"></div>
+                    <button id="start-download-btn" class="btn-primary full-width" disabled>
+                        <i class="fas fa-download"></i> Download
+                    </button>
+                </div>
+
+                <!-- STEP 4: progress -->
+                <div id="progress-step" class="modal-step hidden">
+                    <div class="progress-info">
+                        <span id="dl-status">Downloading…</span>
+                        <span id="dl-pct">0%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div id="dl-bar" class="progress-bar-fill"></div>
+                    </div>
+                </div>
+
+                <!-- STEP 5: done -->
+                <div id="done-step" class="modal-step hidden">
+                    <div class="done-banner">
+                        <i class="fas fa-check-circle done-icon"></i>
+                        <p>Download selesai!</p>
+                    </div>
+                    <div class="done-actions">
+                        <button id="play-now-btn" class="btn-primary" type="button">
+                            <i class="fas fa-play"></i> Play Now
+                        </button>
+                        <a id="save-file-link" href="#" class="btn-ghost" download>
+                            <i class="fas fa-save"></i> Simpan File
+                        </a>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════
+         BOTTOM PLAYER
+    ═══════════════════════════════════════════════ -->
     <div id="music-player" class="music-player glass-panel hidden">
-        <img id="player-cover" class="player-cover" src="" alt="Album Cover">
+        <img id="player-cover" class="player-cover hidden" src="" alt="">
         <div class="player-meta">
             <div id="player-title" class="player-title">Nothing playing</div>
-            <div id="player-artist" class="player-artist">Choose a downloaded track</div>
+            <div id="player-artist" class="player-artist">—</div>
         </div>
         <audio id="player-audio" controls preload="metadata"></audio>
-        <a id="player-download" class="player-download" href="#" download title="Download current file">
+        <a id="player-download" class="player-btn" href="#" download title="Save file">
             <i class="fas fa-download"></i>
         </a>
-        <button id="player-close" class="player-close" type="button" title="Close player">
+        <button id="player-close" class="player-btn" type="button" title="Close player">
             <i class="fas fa-times"></i>
         </button>
     </div>

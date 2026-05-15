@@ -531,26 +531,17 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/api/providers' && m === 'GET') {
-      // Unified search always available
-      const unifiedEntry = {
-        key: 'unified',
-        name: 'All Providers',
-        icon: '🔍',
-        isUnified: true,
-        qualities: [],   // per-track qualities resolved dynamically
-        subProviders: getProviderRegistry ? getProviderRegistry() : []
-      };
+      // Return provider registry for download modal (quality picker, etc.)
+      // No legacy single-provider mode — unified search is the only search mode.
+      const registry = (getProviderRegistry ? getProviderRegistry() : [
+        { key: 'qobuz',   name: 'Qobuz',   icon: '💿', canStream: true,  qualities: [{name:'Hi-Res Max',value:'27'},{name:'Hi-Res',value:'7'},{name:'CD Quality',value:'6'}] },
+        { key: 'deezer',  name: 'Deezer',  icon: '🎧', canStream: false, qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
+        { key: 'tidal',   name: 'Tidal',   icon: '🌊', canStream: false, qualities: [{name:'Hi-Res',value:'HI_RES'},{name:'Lossless',value:'LOSSLESS'},{name:'High',value:'HIGH'}] },
+        { key: 'amazon',  name: 'Amazon',  icon: '📦', canStream: false, qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
+        { key: 'pandora', name: 'Pandora', icon: '📻', canStream: false, qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'}] }
+      ]).filter(p => providers[p.key]);
 
-      // Individual providers (legacy single-provider mode still supported)
-      const legacyList = [
-        { key: 'deezer',   name: 'Deezer',   icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
-        { key: 'qobuz',    name: 'Qobuz',    icon: '💿', qualities: [{name:'Hi-Res Max (27)',value:'27'},{name:'Hi-Res (7)',value:'7'},{name:'CD Quality (6)',value:'6'}] },
-        { key: 'amazon',   name: 'Amazon',   icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
-        { key: 'tidal',    name: 'Tidal',    icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
-        { key: 'pandora',  name: 'Pandora',  icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] }
-      ].filter(item => providers[item.key]);
-
-      return json(res, { providers: [unifiedEntry, ...legacyList] });
+      return json(res, { providers: registry });
     }
 
     if (p === '/api/library' && m === 'GET') {
