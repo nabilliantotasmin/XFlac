@@ -26,6 +26,16 @@
         <!-- ── SEARCH BAR ── -->
         <section class="search-section glass-panel">
             <form id="search-form" class="search-form" autocomplete="off">
+                <!-- Mode toggle: Tracks / Artists -->
+                <div class="search-mode-toggle" id="search-mode-toggle">
+                    <button type="button" class="mode-btn active" data-mode="tracks">
+                        <i class="fas fa-music"></i> Tracks
+                    </button>
+                    <button type="button" class="mode-btn" data-mode="artists">
+                        <i class="fas fa-user"></i> Artists &amp; Publishers
+                    </button>
+                </div>
+
                 <div class="search-input-wrap">
                     <i class="fas fa-search search-icon"></i>
                     <input
@@ -41,7 +51,7 @@
                     </button>
                 </div>
                 <div class="provider-badges" id="provider-badges">
-                    <!-- Injected by JS: 💿 Qobuz  🎧 Deezer  🌊 Tidal  📦 Amazon  📻 Pandora -->
+                    <!-- Injected by JS -->
                 </div>
             </form>
         </section>
@@ -60,7 +70,7 @@
             <div id="library-list" class="library-list hidden"></div>
         </section>
 
-        <!-- ── SEARCH RESULTS ── -->
+        <!-- ── SEARCH RESULTS: TRACKS ── -->
         <section id="results-section" class="results-section hidden">
             <!-- spinner -->
             <div id="loading-spinner" class="spinner hidden">
@@ -73,6 +83,61 @@
             </div>
             <!-- grid -->
             <div id="results-grid" class="results-grid"></div>
+        </section>
+
+        <!-- ── ARTIST / PUBLISHER CARDS ── -->
+        <section id="artist-results-section" class="artist-results-section hidden">
+            <div class="results-header">
+                <h2 class="section-title">Artists &amp; Publishers</h2>
+                <span id="artist-results-meta" class="results-meta"></span>
+            </div>
+            <div id="artist-cards-grid" class="artist-cards-grid"></div>
+        </section>
+
+        <!-- ── ARTIST PROFILE PAGE ── -->
+        <section id="artist-profile-section" class="artist-profile-section hidden">
+            <button id="profile-back-btn" class="back-btn">
+                <i class="fas fa-arrow-left"></i> Back to Search
+            </button>
+
+            <div class="profile-hero glass-panel">
+                <img id="profile-picture" src="" alt="" class="profile-picture">
+                <div class="profile-info">
+                    <h2 id="profile-name" class="profile-name">Artist Name</h2>
+                    <div class="profile-stats">
+                        <span id="profile-albums-count"><i class="fas fa-compact-disc"></i> 0 Albums</span>
+                        <span id="profile-fans-count"><i class="fas fa-heart"></i> 0 Fans</span>
+                    </div>
+                    <p id="profile-provider-label" class="profile-provider-label"></p>
+                </div>
+            </div>
+
+            <div class="profile-albums-section">
+                <h3 class="albums-section-title">Discography</h3>
+                <div id="profile-albums-spinner" class="spinner hidden">
+                    <div class="bounce1"></div><div class="bounce2"></div><div class="bounce3"></div>
+                </div>
+                <div id="profile-albums-grid" class="albums-grid"></div>
+            </div>
+
+            <!-- Album track list (nested inside profile) -->
+            <div id="album-tracks-section" class="album-tracks-section hidden">
+                <div class="album-detail-header glass-panel">
+                    <img id="album-detail-cover" src="" alt="" class="album-detail-cover">
+                    <div class="album-detail-info">
+                        <h3 id="album-detail-title">Album Title</h3>
+                        <p id="album-detail-artist" class="album-detail-artist"></p>
+                        <p id="album-detail-meta" class="album-detail-meta"></p>
+                    </div>
+                    <button id="album-back-btn" class="back-btn album-back-btn">
+                        <i class="fas fa-arrow-left"></i> Back to Albums
+                    </button>
+                </div>
+                <div id="album-tracks-spinner" class="spinner hidden">
+                    <div class="bounce1"></div><div class="bounce2"></div><div class="bounce3"></div>
+                </div>
+                <div id="album-tracks-list" class="tracks-list"></div>
+            </div>
         </section>
 
     </main>

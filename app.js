@@ -1,86 +1,108 @@
 /**
  * XenoFlac — Unified Search Frontend
  *
- * Single search bar → all providers → deduplicated results.
- * Each track card shows:
- *   ⚡  Stream button  — tries Qobuz direct stream first;
- *                        falls back to download flow on failure.
- *   ↓  Download button — opens provider+quality picker modal directly.
+ * Search modes:
+ *   - Tracks  : unified search across all 5 providers, deduplicated results
+ *   - Artists : search artists/publishers via Deezer (best artist API),
+ *               click artist → profile with discography,
+ *               click album  → track list with ⚡ stream + ↓ download per track
  *
- * Flow for ⚡:
- *   1. Check if file already downloaded locally → play immediately.
- *   2. Try Qobuz stream → play in bottom player.
- *   3. On failure → open download modal (show stream-failed notice).
- *
- * Flow for ↓ (and fallback from ⚡):
- *   1. Show provider picker (Qobuz, Deezer, Tidal, Amazon, Pandora).
- *   2. Show quality picker for chosen provider.
- *   3. Download → auto-play when done + "Save File" link.
+ * Stream/Download flow (tracks):
+ *   ⚡ 1. Check local library first → play immediately
+ *      2. Try Qobuz direct stream  → play in bottom player
+ *      3. Fail → open download modal (provider + quality picker)
+ *   ↓  Open download modal directly (provider + quality picker)
  */
 (function () {
   'use strict';
 
   // ─── STATE ────────────────────────────────────────────────────────────────
-  let providersData   = [];   // from /api/providers — used by download modal
-  let downloadPoll    = null;
-  let currentTrack    = null; // unified track object currently in modal
-  let selectedProvider = null; // { key, name, icon, qualities }
-  let selectedQuality  = null; // quality value string
-  let completedDL      = null; // { streamUrl, fileUrl, fileName }
+  let providersData    = [];
+  let searchMode       = 'tracks';   // 'tracks' | 'artists'
+  let currentArtistProv = 'deezer';  // provider used for current artist profile
+  let downloadPoll     = null;
+  let currentTrack     = null;
+  let selectedProvider = null;
+  let selectedQuality  = null;
+  let completedDL      = null;
 
-  // ─── DOM ──────────────────────────────────────────────────────────────────
+  // ─── DOM REFS ─────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
   const el = {
-    searchForm:      $('search-form'),
-    searchInput:     $('search-input'),
-    searchBtn:       $('search-btn'),
-    providerBadges:  $('provider-badges'),
+    // Search
+    searchForm:    $('search-form'),
+    searchInput:   $('search-input'),
+    searchBtn:     $('search-btn'),
+    providerBadges:$('provider-badges'),
+    modeToggle:    $('search-mode-toggle'),
 
-    librarySection:  $('library-section'),
-    refreshLibBtn:   $('refresh-library-btn'),
-    libraryList:     $('library-list'),
+    // Library
+    refreshLibBtn: $('refresh-library-btn'),
+    libraryList:   $('library-list'),
 
-    resultsSection:  $('results-section'),
-    loadingSpinner:  $('loading-spinner'),
-    resultsHeader:   $('results-header'),
-    resultsMeta:     $('results-meta'),
-    resultsGrid:     $('results-grid'),
+    // Track results
+    resultsSection:$('results-section'),
+    loadingSpinner:$('loading-spinner'),
+    resultsHeader: $('results-header'),
+    resultsMeta:   $('results-meta'),
+    resultsGrid:   $('results-grid'),
 
-    // Modal
-    dlModal:         $('dl-modal'),
-    dlClose:         $('dl-close'),
-    dlCover:         $('dl-cover'),
-    dlTitle:         $('dl-modal-title'),
-    dlArtist:        $('dl-modal-artist'),
-    dlMeta:          $('dl-modal-meta'),
+    // Artist results
+    artistSection: $('artist-results-section'),
+    artistMeta:    $('artist-results-meta'),
+    artistGrid:    $('artist-cards-grid'),
 
-    streamFailedNotice: $('stream-failed-notice'),
-    streamFailedMsg:    $('stream-failed-msg'),
+    // Artist profile
+    profileSection:      $('artist-profile-section'),
+    profileBackBtn:      $('profile-back-btn'),
+    profilePicture:      $('profile-picture'),
+    profileName:         $('profile-name'),
+    profileAlbumsCount:  $('profile-albums-count'),
+    profileFansCount:    $('profile-fans-count'),
+    profileProvLabel:    $('profile-provider-label'),
+    profileAlbumsSpinner:$('profile-albums-spinner'),
+    profileAlbumsGrid:   $('profile-albums-grid'),
 
-    providerStep:    $('provider-step'),
-    providerPicker:  $('provider-picker'),
+    // Album tracks
+    albumTracksSection:  $('album-tracks-section'),
+    albumBackBtn:        $('album-back-btn'),
+    albumDetailCover:    $('album-detail-cover'),
+    albumDetailTitle:    $('album-detail-title'),
+    albumDetailArtist:   $('album-detail-artist'),
+    albumDetailMeta:     $('album-detail-meta'),
+    albumTracksSpinner:  $('album-tracks-spinner'),
+    albumTracksList:     $('album-tracks-list'),
 
-    qualityStep:     $('quality-step'),
-    qualityPicker:   $('quality-picker'),
-    startDlBtn:      $('start-download-btn'),
-
-    progressStep:    $('progress-step'),
-    dlStatus:        $('dl-status'),
-    dlPct:           $('dl-pct'),
-    dlBar:           $('dl-bar'),
-
-    doneStep:        $('done-step'),
-    playNowBtn:      $('play-now-btn'),
-    saveFileLink:    $('save-file-link'),
+    // Download modal
+    dlModal:             $('dl-modal'),
+    dlClose:             $('dl-close'),
+    dlCover:             $('dl-cover'),
+    dlTitle:             $('dl-modal-title'),
+    dlArtist:            $('dl-modal-artist'),
+    dlMeta:              $('dl-modal-meta'),
+    streamFailedNotice:  $('stream-failed-notice'),
+    streamFailedMsg:     $('stream-failed-msg'),
+    providerStep:        $('provider-step'),
+    providerPicker:      $('provider-picker'),
+    qualityStep:         $('quality-step'),
+    qualityPicker:       $('quality-picker'),
+    startDlBtn:          $('start-download-btn'),
+    progressStep:        $('progress-step'),
+    dlStatus:            $('dl-status'),
+    dlPct:               $('dl-pct'),
+    dlBar:               $('dl-bar'),
+    doneStep:            $('done-step'),
+    playNowBtn:          $('play-now-btn'),
+    saveFileLink:        $('save-file-link'),
 
     // Player
-    musicPlayer:     $('music-player'),
-    playerCover:     $('player-cover'),
-    playerTitle:     $('player-title'),
-    playerArtist:    $('player-artist'),
-    playerAudio:     $('player-audio'),
-    playerDownload:  $('player-download'),
-    playerClose:     $('player-close'),
+    musicPlayer:   $('music-player'),
+    playerCover:   $('player-cover'),
+    playerTitle:   $('player-title'),
+    playerArtist:  $('player-artist'),
+    playerAudio:   $('player-audio'),
+    playerDownload:$('player-download'),
+    playerClose:   $('player-close'),
   };
 
   // ─── INIT ─────────────────────────────────────────────────────────────────
@@ -108,10 +130,35 @@
   }
 
   function bindEvents() {
+    // Search
     el.searchForm.addEventListener('submit', onSearch);
     el.refreshLibBtn?.addEventListener('click', () => loadLibrary(true));
 
-    // Modal
+    // Mode toggle
+    el.modeToggle?.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        searchMode = btn.dataset.mode;
+        el.modeToggle.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        el.searchInput.placeholder = searchMode === 'tracks'
+          ? 'Search tracks, albums…'
+          : 'Search artists, publishers…';
+      });
+    });
+
+    // Navigation back buttons
+    el.profileBackBtn?.addEventListener('click', () => {
+      hide(el.profileSection);
+      show(el.artistSection);
+      hide(el.albumTracksSection);
+    });
+    el.albumBackBtn?.addEventListener('click', () => {
+      hide(el.albumTracksSection);
+      // show albums grid again (scroll to it)
+      el.profileAlbumsGrid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    // Download modal
     el.dlClose.addEventListener('click', closeModal);
     el.dlModal.addEventListener('click', e => { if (e.target === el.dlModal) closeModal(); });
     el.startDlBtn.addEventListener('click', startDownload);
@@ -121,15 +168,32 @@
     el.playerClose?.addEventListener('click', closePlayer);
   }
 
-  // ─── SEARCH ───────────────────────────────────────────────────────────────
+
+
+  // ─── SEARCH DISPATCHER ────────────────────────────────────────────────────
   async function onSearch(e) {
     e.preventDefault();
     const q = el.searchInput.value.trim();
     if (!q) return;
 
+    // Hide all result panels
+    hide(el.resultsSection);
+    hide(el.artistSection);
+    hide(el.profileSection);
+    el.resultsGrid.innerHTML = '';
+    el.artistGrid.innerHTML  = '';
+
+    if (searchMode === 'artists') {
+      await searchArtists(q);
+    } else {
+      await searchTracks(q);
+    }
+  }
+
+  // ─── TRACK SEARCH ─────────────────────────────────────────────────────────
+  async function searchTracks(q) {
     show(el.resultsSection);
     hide(el.resultsHeader);
-    el.resultsGrid.innerHTML = '';
     show(el.loadingSpinner);
     el.searchBtn.disabled = true;
 
@@ -148,16 +212,13 @@
           <p>Tidak ada hasil untuk "<strong>${esc(q)}</strong>"</p>
         </div>`;
         show(el.resultsHeader);
-        el.resultsMeta.textContent = '0 tracks found';
+        el.resultsMeta.textContent = '0 results';
         return;
       }
 
-      // Stats
       const errors = Object.keys(data.providerErrors || {}).length;
-      const total  = providersData.length;
-      el.resultsMeta.textContent = `${tracks.length} tracks · ${total - errors}/${total} providers`;
+      el.resultsMeta.textContent = `${tracks.length} tracks · ${providersData.length - errors}/${providersData.length} providers`;
       show(el.resultsHeader);
-
       renderTracks(tracks);
     } catch (err) {
       hide(el.loadingSpinner);
@@ -170,17 +231,13 @@
     }
   }
 
-  // ─── RENDER TRACKS ────────────────────────────────────────────────────────
   function renderTracks(tracks) {
     el.resultsGrid.innerHTML = '';
-    tracks.forEach(track => {
-      const card = buildTrackCard(track);
-      el.resultsGrid.appendChild(card);
-    });
+    tracks.forEach(track => el.resultsGrid.appendChild(buildTrackCard(track)));
   }
 
   function buildTrackCard(track) {
-    const hasQobuz = track.providers?.some(p => p.key === 'qobuz');
+    const hasQobuz  = track.providers?.some(p => p.key === 'qobuz');
     const provChips = (track.providers || [])
       .map(p => `<span class="chip" title="${p.name}">${p.icon}</span>`)
       .join('');
@@ -189,21 +246,20 @@
     card.className = 'track-card';
     card.innerHTML = `
       <div class="card-art-wrap">
-        <img class="card-art" src="${track.cover || ''}" alt=""
-             onerror="this.style.display='none'">
+        <img class="card-art" src="${track.cover || ''}" alt="" onerror="this.style.display='none'">
         <div class="card-art-fallback"><i class="fas fa-music"></i></div>
       </div>
       <div class="card-body">
         <div class="card-title" title="${esc(track.title)}">${esc(track.title)}</div>
         <div class="card-artist" title="${esc(track.artist)}">${esc(track.artist)}</div>
-        ${track.album ? `<div class="card-album" title="${esc(track.album)}">${esc(track.album)}</div>` : ''}
+        ${track.album ? `<div class="card-album">${esc(track.album)}</div>` : ''}
         <div class="card-meta">
           <span class="card-dur">${fmtDur(track.duration)}</span>
           <span class="card-providers">${provChips}</span>
         </div>
       </div>
       <div class="card-actions">
-        <button class="btn-stream" title="${hasQobuz ? 'Stream via Qobuz' : 'Stream / Play'}">
+        <button class="btn-stream" title="${hasQobuz ? 'Stream via Qobuz' : 'Stream / Download'}">
           <i class="fas fa-bolt"></i>
         </button>
         <button class="btn-dl" title="Download">
@@ -213,67 +269,249 @@
     `;
 
     card.querySelector('.btn-stream').addEventListener('click', e => {
-      e.stopPropagation();
-      handleStream(track);
+      e.stopPropagation(); handleStream(track);
     });
     card.querySelector('.btn-dl').addEventListener('click', e => {
-      e.stopPropagation();
-      openDownloadModal(track, false);
+      e.stopPropagation(); openDownloadModal(track, false);
     });
-
     return card;
   }
 
+  // ─── ARTIST SEARCH ────────────────────────────────────────────────────────
+  async function searchArtists(q) {
+    show(el.artistSection);
+    el.artistMeta.textContent = '';
+    el.artistGrid.innerHTML = `<div class="spinner-inline"><div class="bounce1"></div><div class="bounce2"></div><div class="bounce3"></div></div>`;
+    el.searchBtn.disabled = true;
+
+    // Try providers in order that support artist search
+    const artistProviders = ['deezer', 'qobuz', 'tidal', 'amazon'];
+    let artists = [];
+    let usedProv = 'deezer';
+
+    for (const prov of artistProviders) {
+      try {
+        const r = await fetch(`/api/search-artist?provider=${prov}&q=${encodeURIComponent(q)}&limit=16`);
+        const d = await r.json();
+        if (!d.error && d.artists?.length) {
+          artists  = d.artists;
+          usedProv = prov;
+          break;
+        }
+      } catch {}
+    }
+
+    el.searchBtn.disabled = false;
+
+    if (!artists.length) {
+      el.artistGrid.innerHTML = `<div class="no-results">
+        <i class="fas fa-user-slash"></i>
+        <p>Tidak ada artist ditemukan untuk "<strong>${esc(q)}</strong>"</p>
+      </div>`;
+      el.artistMeta.textContent = '0 artists found';
+      return;
+    }
+
+    currentArtistProv = usedProv;
+    el.artistMeta.textContent = `${artists.length} artists · via ${usedProv}`;
+    renderArtistCards(artists, usedProv);
+  }
+
+  function renderArtistCards(artists, prov) {
+    el.artistGrid.innerHTML = '';
+    artists.forEach(a => {
+      const card = document.createElement('div');
+      card.className = 'artist-card glass-panel';
+      card.innerHTML = `
+        <img class="artist-card-img" src="${a.picture || ''}" alt="${esc(a.name)}"
+             onerror="this.src=''; this.classList.add('no-img')">
+        <div class="artist-card-info">
+          <div class="artist-card-name">${esc(a.name)}</div>
+          <div class="artist-card-meta">
+            ${a.albumsCount ? `<span><i class="fas fa-compact-disc"></i> ${a.albumsCount} albums</span>` : ''}
+            ${a.fans        ? `<span><i class="fas fa-heart"></i> ${fmtNum(a.fans)} fans</span>`        : ''}
+          </div>
+          <div class="artist-card-cta">View Profile <i class="fas fa-arrow-right"></i></div>
+        </div>
+      `;
+      card.addEventListener('click', () => showArtistProfile(a.id, prov));
+      el.artistGrid.appendChild(card);
+    });
+  }
+
+  // ─── ARTIST PROFILE ───────────────────────────────────────────────────────
+  async function showArtistProfile(artistId, prov) {
+    hide(el.artistSection);
+    hide(el.albumTracksSection);
+    show(el.profileSection);
+    show(el.profileAlbumsSpinner);
+    el.profileAlbumsGrid.innerHTML = '';
+    el.profileName.textContent     = '…';
+    el.profilePicture.src          = '';
+
+    const provMeta = providersData.find(p => p.key === prov);
+    el.profileProvLabel.textContent = provMeta ? `via ${provMeta.icon} ${provMeta.name}` : '';
+
+    let data;
+    try {
+      const r = await fetch(`/api/artist?provider=${prov}&id=${encodeURIComponent(artistId)}`);
+      data = await r.json();
+      if (data.error) throw new Error(data.error);
+    } catch (err) {
+      el.profileAlbumsGrid.innerHTML = `<div class="no-results error"><p>${esc(err.message)}</p></div>`;
+      hide(el.profileAlbumsSpinner);
+      return;
+    }
+
+    const a = data.artist;
+    el.profilePicture.src = a.picture || '';
+    el.profilePicture.onerror = () => { el.profilePicture.src = ''; };
+    el.profileName.textContent = a.name;
+    el.profileAlbumsCount.innerHTML = `<i class="fas fa-compact-disc"></i> ${a.albumsCount || 0} Albums`;
+    el.profileFansCount.innerHTML   = `<i class="fas fa-heart"></i> ${fmtNum(a.fans || 0)} Fans`;
+    hide(el.profileAlbumsSpinner);
+
+    const albums = data.albums || [];
+    if (!albums.length) {
+      el.profileAlbumsGrid.innerHTML = '<p style="color:var(--text-2);padding:1rem">No albums found.</p>';
+      return;
+    }
+
+    albums.forEach(al => {
+      const card = document.createElement('div');
+      card.className = 'album-card';
+      card.innerHTML = `
+        <div class="album-art-wrap">
+          <img src="${al.cover || ''}" alt="${esc(al.title)}" onerror="this.style.display='none'">
+          <div class="album-play-overlay"><i class="fas fa-list-ul"></i></div>
+        </div>
+        <div class="album-card-body">
+          <div class="album-card-title">${esc(al.title)}</div>
+          <div class="album-card-meta">
+            <span>${al.year || ''}</span>
+            ${al.tracksCount ? `<span class="badge">${al.tracksCount} tracks</span>` : ''}
+          </div>
+        </div>
+      `;
+      card.addEventListener('click', () => showAlbumTracks(al.id, al, prov));
+      el.profileAlbumsGrid.appendChild(card);
+    });
+  }
+
+  // ─── ALBUM TRACKS ─────────────────────────────────────────────────────────
+  async function showAlbumTracks(albumId, albumInfo, prov) {
+    show(el.albumTracksSection);
+    show(el.albumTracksSpinner);
+    el.albumTracksList.innerHTML = '';
+
+    el.albumDetailCover.src           = albumInfo?.cover  || '';
+    el.albumDetailTitle.textContent   = albumInfo?.title  || 'Album';
+    el.albumDetailArtist.textContent  = albumInfo?.artist || '';
+    el.albumDetailMeta.textContent    = [
+      albumInfo?.tracksCount ? `${albumInfo.tracksCount} tracks` : '',
+      albumInfo?.year || ''
+    ].filter(Boolean).join(' · ');
+
+    el.albumDetailCover.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    let tracks = [];
+    try {
+      const r = await fetch(`/api/album?provider=${prov}&id=${encodeURIComponent(albumId)}`);
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      tracks = d.tracks || [];
+    } catch (err) {
+      el.albumTracksList.innerHTML = `<div class="no-results error"><p>${esc(err.message)}</p></div>`;
+      hide(el.albumTracksSpinner);
+      return;
+    }
+
+    hide(el.albumTracksSpinner);
+
+    if (!tracks.length) {
+      el.albumTracksList.innerHTML = '<p style="color:var(--text-2);padding:1rem">No tracks found.</p>';
+      return;
+    }
+
+    tracks.forEach((t, idx) => {
+      const cover = t.cover || albumInfo?.cover || '';
+      // Build a minimal unified-like track object so download modal works
+      const trackObj = {
+        id:       t.id,
+        title:    t.title,
+        artist:   t.artist || albumInfo?.artist || '',
+        album:    albumInfo?.title || '',
+        cover:    cover,
+        duration: t.duration || 0,
+        isrc:     t.isrc || '',
+        // Tag with provider so download modal resolves correctly
+        _provider: prov,
+        providers: providersData.filter(p => p.key === prov).map(p => ({
+          key: p.key, name: p.name, icon: p.icon,
+          trackId: t.id, canStream: p.canStream || false, qualities: p.qualities || []
+        }))
+      };
+
+      const row = document.createElement('div');
+      row.className = 'track-row';
+      row.innerHTML = `
+        <span class="track-row-num">${t.trackNumber || idx + 1}</span>
+        <img class="track-row-cover" src="${cover}" alt="" onerror="this.style.visibility='hidden'">
+        <div class="track-row-info">
+          <div class="track-row-title">${esc(t.title)}</div>
+          <div class="track-row-artist">${esc(t.artist || albumInfo?.artist || '')}</div>
+        </div>
+        <span class="track-row-dur">${fmtDur(t.duration)}</span>
+        <div class="track-row-actions">
+          <button class="btn-stream-sm" title="Stream / Play"><i class="fas fa-bolt"></i></button>
+          <button class="btn-dl-sm" title="Download"><i class="fas fa-download"></i></button>
+        </div>
+      `;
+
+      row.querySelector('.btn-stream-sm').addEventListener('click', e => {
+        e.stopPropagation(); handleStream(trackObj);
+      });
+      row.querySelector('.btn-dl-sm').addEventListener('click', e => {
+        e.stopPropagation(); openDownloadModal(trackObj, false);
+      });
+
+      el.albumTracksList.appendChild(row);
+    });
+  }
+
+
+
   // ─── STREAM LOGIC ─────────────────────────────────────────────────────────
-  /**
-   * Primary stream handler.
-   * 1. Check local library first.
-   * 2. Try Qobuz direct stream.
-   * 3. On failure → open download modal with stream-failed notice.
-   */
   async function handleStream(track) {
-    // 1. Already downloaded locally?
+    // 1. Check local library
     const localMatch = await findLocalTrack(track);
     if (localMatch) {
       playInPlayer({
-        title:       track.title,
-        artist:      track.artist,
-        cover:       track.cover || '',
-        streamUrl:   localMatch.streamUrl,
-        downloadUrl: localMatch.downloadUrl,
-        fileName:    localMatch.fileName
+        title: track.title, artist: track.artist, cover: track.cover || '',
+        streamUrl: localMatch.streamUrl, downloadUrl: localMatch.downloadUrl,
+        fileName:  localMatch.fileName
       });
       return;
     }
 
-    // 2. Try Qobuz stream
+    // 2. Try Qobuz
     const qProv = track.providers?.find(p => p.key === 'qobuz');
     if (!qProv) {
-      // No Qobuz → straight to download modal
       openDownloadModal(track, true, 'Track tidak tersedia di Qobuz.');
       return;
     }
 
-    // Show "Loading…" in player while resolving
     setPlayerLoading(track, 'Memuat stream Qobuz…');
-
     try {
-      const quality = qProv.qualities?.[2]?.value || '6'; // default CD quality
+      const quality = qProv.qualities?.[2]?.value || '6';
       const r = await fetch(
         `/api/unified-stream-url?provider=qobuz&id=${encodeURIComponent(qProv.trackId)}&quality=${encodeURIComponent(quality)}`
       );
       const data = await r.json();
-
-      if (data.error || !data.canStream) {
-        throw new Error(data.error || 'Qobuz stream tidak tersedia');
-      }
-
+      if (data.error || !data.canStream) throw new Error(data.error || 'Qobuz stream tidak tersedia');
       playInPlayer({
-        title:     track.title,
-        artist:    track.artist,
-        cover:     track.cover || '',
-        streamUrl: data.proxyUrl,
-        fileName:  `${track.artist} - ${track.title}`
+        title: track.title, artist: track.artist, cover: track.cover || '',
+        streamUrl: data.proxyUrl, fileName: `${track.artist} - ${track.title}`
       });
     } catch (err) {
       console.warn('[stream] Qobuz gagal:', err.message);
@@ -282,7 +520,6 @@
     }
   }
 
-  /** Look for an already-downloaded track by title+artist match. */
   async function findLocalTrack(track) {
     try {
       const r = await fetch('/api/library');
@@ -290,30 +527,21 @@
       const lib = d.tracks || [];
       const t = fuzzyTitle(track.title);
       const a = fuzzyStr(track.artist);
-      return lib.find(l =>
-        fuzzyTitle(l.title) === t && fuzzyStr(l.artist) === a
-      ) || null;
+      return lib.find(l => fuzzyTitle(l.title) === t && fuzzyStr(l.artist) === a) || null;
     } catch { return null; }
   }
 
   // ─── DOWNLOAD MODAL ───────────────────────────────────────────────────────
-  /**
-   * @param {object}  track          — unified track object
-   * @param {boolean} streamFailed   — show stream-failed notice
-   * @param {string}  failedMsg      — optional error message text
-   */
   function openDownloadModal(track, streamFailed = false, failedMsg = '') {
     currentTrack     = track;
     selectedProvider = null;
     selectedQuality  = null;
     completedDL      = null;
 
-    // Fill header
     el.dlTitle.textContent  = track.title;
     el.dlArtist.textContent = track.artist;
     el.dlMeta.textContent   = [
-      track.album,
-      fmtDur(track.duration),
+      track.album, fmtDur(track.duration),
       track.isrc ? `ISRC: ${track.isrc}` : ''
     ].filter(Boolean).join(' · ');
 
@@ -321,52 +549,40 @@
       el.dlCover.src = track.cover;
       el.dlCover.onerror = () => hide(el.dlCover);
       show(el.dlCover);
-    } else {
-      hide(el.dlCover);
-    }
+    } else { hide(el.dlCover); }
 
-    // Stream-failed notice
     if (streamFailed) {
       el.streamFailedMsg.textContent = failedMsg
         ? `Streaming gagal: ${failedMsg}. Pilih provider untuk download.`
         : 'Streaming via Qobuz tidak tersedia. Pilih provider untuk download.';
       show(el.streamFailedNotice);
-    } else {
-      hide(el.streamFailedNotice);
-    }
+    } else { hide(el.streamFailedNotice); }
 
-    // Reset steps
     hide(el.qualityStep);
     hide(el.progressStep);
     hide(el.doneStep);
     el.startDlBtn.disabled = true;
 
-    // Build provider picker
     buildProviderPicker(track);
     show(el.providerStep);
-
     show(el.dlModal);
   }
 
   function closeModal() {
     hide(el.dlModal);
     clearInterval(downloadPoll);
-    currentTrack     = null;
-    selectedProvider = null;
-    selectedQuality  = null;
+    currentTrack = selectedProvider = selectedQuality = null;
   }
 
   function buildProviderPicker(track) {
     el.providerPicker.innerHTML = '';
-
-    // Only show providers that have this track OR all providers if track has no providers[]
     const available = providersData.filter(p => {
       if (!track.providers?.length) return true;
       return track.providers.some(tp => tp.key === p.key);
     });
 
     if (!available.length) {
-      el.providerPicker.innerHTML = '<p class="no-providers">Tidak ada provider yang tersedia.</p>';
+      el.providerPicker.innerHTML = '<p class="no-providers">Tidak ada provider tersedia.</p>';
       return;
     }
 
@@ -389,12 +605,8 @@
     selectedProvider = prov;
     selectedQuality  = null;
     el.startDlBtn.disabled = true;
-
-    // Highlight
     el.providerPicker.querySelectorAll('.prov-pick-btn').forEach(b => b.classList.remove('selected'));
     btnEl.classList.add('selected');
-
-    // Build quality picker
     buildQualityPicker(prov);
     show(el.qualityStep);
     hide(el.progressStep);
@@ -404,14 +616,7 @@
   function buildQualityPicker(prov) {
     el.qualityPicker.innerHTML = '';
     const qualities = prov.qualities || [];
-
-    if (!qualities.length) {
-      // No choices — auto-select default
-      selectedQuality = 'best';
-      el.startDlBtn.disabled = false;
-      return;
-    }
-
+    if (!qualities.length) { selectedQuality = 'best'; el.startDlBtn.disabled = false; return; }
     qualities.forEach((q, i) => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -426,8 +631,6 @@
       });
       el.qualityPicker.appendChild(btn);
     });
-
-    // Auto-select first
     selectedQuality = qualities[0].value;
     el.startDlBtn.disabled = false;
   }
@@ -436,7 +639,6 @@
   async function startDownload() {
     if (!currentTrack || !selectedProvider || !selectedQuality) return;
 
-    // Resolve the track ID for this specific provider
     let provTrackId = currentTrack.id;
     if (currentTrack.providers?.length) {
       const pm = currentTrack.providers.find(p => p.key === selectedProvider.key);
@@ -444,18 +646,12 @@
     }
 
     const trackPayload = {
-      id:       provTrackId,
-      title:    currentTrack.title,
-      artist:   currentTrack.artist,
-      album:    currentTrack.album  || '',
-      cover:    currentTrack.cover  || '',
-      duration: currentTrack.duration || 0,
-      isrc:     currentTrack.isrc   || ''
+      id: provTrackId, title: currentTrack.title, artist: currentTrack.artist,
+      album: currentTrack.album || '', cover: currentTrack.cover || '',
+      duration: currentTrack.duration || 0, isrc: currentTrack.isrc || ''
     };
 
-    hide(el.providerStep);
-    hide(el.qualityStep);
-    hide(el.doneStep);
+    hide(el.providerStep); hide(el.qualityStep); hide(el.doneStep);
     show(el.progressStep);
     el.dlStatus.textContent = 'Memulai download…';
     el.dlPct.textContent    = '0%';
@@ -463,13 +659,9 @@
 
     try {
       const r = await fetch('/api/download', {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider: selectedProvider.key,
-          track:    trackPayload,
-          quality:  selectedQuality
-        })
+        body: JSON.stringify({ provider: selectedProvider.key, track: trackPayload, quality: selectedQuality })
       });
       const d = await r.json();
       if (d.error) throw new Error(d.error);
@@ -485,28 +677,18 @@
       try {
         const r = await fetch(`/api/download/${jobId}/progress`);
         const d = await r.json();
-
         const pct = d.progress || 0;
         el.dlPct.textContent  = `${pct}%`;
         el.dlBar.style.width  = `${pct}%`;
         el.dlStatus.textContent = d.status === 'downloading' ? 'Downloading…'
-          : d.status === 'pending' ? 'Menunggu…'
-          : d.status;
-
+          : d.status === 'pending' ? 'Menunggu…' : d.status;
         if (d.status === 'completed') {
           clearInterval(downloadPoll);
-          completedDL = {
-            streamUrl:   d.streamUrl,
-            fileUrl:     d.fileUrl,
-            fileName:    d.fileName || d.fileUrl?.split('/').pop()
-          };
-          hide(el.progressStep);
-          show(el.doneStep);
+          completedDL = { streamUrl: d.streamUrl, fileUrl: d.fileUrl, fileName: d.fileName || d.fileUrl?.split('/').pop() };
+          hide(el.progressStep); show(el.doneStep);
           el.saveFileLink.href = d.fileUrl;
           el.saveFileLink.setAttribute('download', completedDL.fileName);
-          // Auto-play
           playCompleted();
-          // Refresh library silently
           loadLibrary(false);
         } else if (d.status === 'error') {
           clearInterval(downloadPoll);
@@ -519,12 +701,9 @@
   function playCompleted() {
     if (!completedDL?.streamUrl) return;
     playInPlayer({
-      title:       currentTrack?.title   || '',
-      artist:      currentTrack?.artist  || '',
-      cover:       currentTrack?.cover   || '',
-      streamUrl:   completedDL.streamUrl,
-      downloadUrl: completedDL.fileUrl,
-      fileName:    completedDL.fileName
+      title: currentTrack?.title || '', artist: currentTrack?.artist || '',
+      cover: currentTrack?.cover || '', streamUrl: completedDL.streamUrl,
+      downloadUrl: completedDL.fileUrl, fileName: completedDL.fileName
     });
   }
 
@@ -533,12 +712,8 @@
     show(el.musicPlayer);
     el.playerTitle.textContent  = track?.title  || 'Loading…';
     el.playerArtist.textContent = msg || track?.artist || '';
-    if (track?.cover) {
-      el.playerCover.src = track.cover;
-      show(el.playerCover);
-    } else {
-      hide(el.playerCover);
-    }
+    if (track?.cover) { el.playerCover.src = track.cover; show(el.playerCover); }
+    else hide(el.playerCover);
     el.playerAudio.removeAttribute('src');
     el.playerAudio.load();
   }
@@ -548,12 +723,8 @@
     show(el.musicPlayer);
     el.playerTitle.textContent  = item.title  || 'Unknown';
     el.playerArtist.textContent = item.artist || '—';
-    if (item.cover) {
-      el.playerCover.src = item.cover;
-      show(el.playerCover);
-    } else {
-      hide(el.playerCover);
-    }
+    if (item.cover) { el.playerCover.src = item.cover; show(el.playerCover); }
+    else hide(el.playerCover);
     if (item.downloadUrl) {
       el.playerDownload.href = item.downloadUrl;
       el.playerDownload.setAttribute('download', item.fileName || 'track');
@@ -566,11 +737,7 @@
   }
 
   function closePlayer() {
-    if (el.playerAudio) {
-      el.playerAudio.pause();
-      el.playerAudio.removeAttribute('src');
-      el.playerAudio.load();
-    }
+    if (el.playerAudio) { el.playerAudio.pause(); el.playerAudio.removeAttribute('src'); el.playerAudio.load(); }
     hide(el.musicPlayer);
   }
 
@@ -591,12 +758,8 @@
   function renderLibrary(tracks, showEmpty) {
     el.libraryList.innerHTML = '';
     if (!tracks.length) {
-      if (showEmpty) {
-        el.libraryList.innerHTML = '<div class="library-empty">No downloaded music yet.</div>';
-        show(el.libraryList);
-      } else {
-        hide(el.libraryList);
-      }
+      if (showEmpty) { el.libraryList.innerHTML = '<div class="library-empty">No downloaded music yet.</div>'; show(el.libraryList); }
+      else hide(el.libraryList);
       return;
     }
     tracks.forEach(t => {
@@ -622,21 +785,19 @@
   }
 
   // ─── UTILS ────────────────────────────────────────────────────────────────
-  function show(el) { el?.classList.remove('hidden'); }
-  function hide(el) { el?.classList.add('hidden'); }
+  function show(e) { e?.classList.remove('hidden'); }
+  function hide(e) { e?.classList.add('hidden'); }
 
   function esc(s) {
     const d = document.createElement('div');
     d.textContent = String(s ?? '');
     return d.innerHTML;
   }
-
   function fmtDur(ms) {
     if (!ms) return '';
     const s = Math.floor(ms / 1000);
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
-
   function fmtBytes(b) {
     if (!b) return '';
     if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB';
@@ -644,16 +805,15 @@
     if (b >= 1e3) return (b / 1e3).toFixed(0) + ' KB';
     return b + ' B';
   }
-
-  function fuzzyStr(s) {
-    return String(s || '').toLowerCase().trim();
+  function fmtNum(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
   }
-
+  function fuzzyStr(s) { return String(s || '').toLowerCase().trim(); }
   function fuzzyTitle(s) {
     return String(s || '').toLowerCase().trim()
-      .replace(/\s*\(feat\..*?\)/gi, '')
-      .replace(/\s*\[.*?\]/gi, '')
-      .trim();
+      .replace(/\s*\(feat\..*?\)/gi, '').replace(/\s*\[.*?\]/gi, '').trim();
   }
 
   // ─── BOOT ─────────────────────────────────────────────────────────────────
