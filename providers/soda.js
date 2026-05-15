@@ -1490,11 +1490,56 @@ class SodaProvider {
     const payload = decodeAlbumId(albumId);
     const artist = payload.artist || '';
     const albumTitle = payload.album || safeString(albumId);
+
+    // ── Strategy 1: search "<artist> <album>" and filter strictly by album title ──
     const query = [artist, albumTitle].filter(Boolean).join(' ');
     const tracks = await this.search(query || albumTitle, CONFIG.maxResults);
-    const filtered = tracks.filter(t => !albumTitle || t.album.toLowerCase() === albumTitle.toLowerCase());
-    const albumTracks = filtered.length ? filtered : tracks;
-    const first = albumTracks[0] || {};
+
+    // Normalise album title for comparison (strip punctuation, lowercase)
+    const normAlbum = (s) => String(s || '').toLowerCase().replace(/[^\w\s]/g, '').trim();
+    const targetAlbum = normAlbum(albumTitle);
+
+    // Strict match: track.album must match album title exactly (normalised)
+    let albumTracks = targetAlbum
+      ? tracks.filter(t => normAlbum(t.album) === targetAlbum)
+      : tracks;
+
+    // Loose match fallback: partial containment (album title words all present)
+    if (!albumTracks.length && targetAlbum) {
+      const words = targetAlbum.split(/\s+/).filter(w => w.length > 2);
+      if (words.length) {
+        albumTracks = tracks.filter(t => {
+          const ta = normAlbum(t.album);
+          return words.every(w => ta.includes(w));
+        });
+      }
+    }
+
+    // Last resort: fall back to all search results
+    if (!albumTracks.length) albumTracks = tracks;
+
+    // ── Deduplicate by title (keep highest-quality/first occurrence) ──
+    const seenTitles = new Set();
+    const deduped = [];
+    for (const t of albumTracks) {
+      const key = String(t.title || '').toLowerCase().trim();
+      if (!seenTitles.has(key)) {
+        seenTitles.add(key);
+        deduped.push(t);
+      }
+    }
+
+    // ── Sort: prefer explicit trackNumber from provider, then preserve search order ──
+    // The aggregator APIs (cenguigui, bugpk, aa1…) return tracks in the album's
+    // natural order when queried with the album title — so search-order IS track order.
+    const sorted = deduped.map((t, i) => ({ ...t, _searchIdx: i }));
+    // Only re-sort if at least half the tracks carry a real trackNumber
+    const withNum = sorted.filter(t => t.trackNumber && t.trackNumber > 0);
+    if (withNum.length >= Math.ceil(sorted.length / 2)) {
+      sorted.sort((a, b) => (a.trackNumber || 999) - (b.trackNumber || 999));
+    }
+
+    const first = sorted[0] || {};
 
     return {
       album: {
@@ -1503,16 +1548,16 @@ class SodaProvider {
         artist: artist || first.artist || '',
         cover: first.cover || '',
         year: '',
-        tracksCount: albumTracks.length
+        tracksCount: sorted.length
       },
-      tracks: albumTracks.map((t, i) => ({
+      tracks: sorted.map((t, i) => ({
         id: t.id,
         title: t.title,
         artist: t.artist,
-        album: t.album,
+        album: t.album || albumTitle,
         cover: t.cover || first.cover || '',
         duration: t.duration,
-        trackNumber: i + 1,
+        trackNumber: t.trackNumber || i + 1,
         isrc: t.isrc || ''
       }))
     };

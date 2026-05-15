@@ -275,7 +275,7 @@
 
     try {
       const res = await fetch(
-        `/api/stream-url?provider=${encodeURIComponent(currentProvider)}&id=${encodeURIComponent(track.id)}&quality=${encodeURIComponent(quality)}`
+        `/api/stream-url?provider=${encodeURIComponent(currentProvider)}&id=${encodeURIComponent(track.id)}&quality=${encodeURIComponent(quality)}&duration=${encodeURIComponent(track.duration || 0)}`
       );
       const data = await res.json();
 

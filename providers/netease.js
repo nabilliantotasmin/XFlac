@@ -1032,21 +1032,39 @@ class NetEaseProvider {
     }
 
     const album = data.album || {};
-    const songs = data.songs || album.songs || [];
-    const albumInfo = normalizeAlbum(album) || { id: String(albumId), title: 'Album', cover: '', artist: '', year: '', tracksCount: songs.length };
+    const rawSongs = data.songs || album.songs || [];
+
+    const albumInfo = normalizeAlbum(album) || {
+      id: String(albumId), title: 'Album', cover: '', artist: '', year: '', tracksCount: rawSongs.length
+    };
+
+    // ── Normalise + sort by trackNumber (field `no` from NetEase) ──────────
+    // The `no` field is the authoritative in-album position from NetEase.
+    // Without it (e.g. public API fallback), preserve the original order.
+    const normalisedSongs = rawSongs.map((song, idx) => {
+      const t = normalizeTrack({ ...song, al: song.al || song.album || album }) || {};
+      return {
+        ...t,
+        // Guarantee we use the real NetEase integer song ID for streaming —
+        // normalizeTrack already extracts id/songId/sid, but make sure the
+        // fallback uses song.id directly (the only ID public download APIs understand).
+        id: t.id || String(song.id || song.songId || ''),
+        trackNumber: song.no || song.track_number || idx + 1,
+        cover: t.cover || albumInfo.cover,
+        album: t.album || albumInfo.title,
+        albumId: albumInfo.id
+      };
+    }).filter(t => t.id);
+
+    // Sort by trackNumber so the displayed order matches the real album order
+    normalisedSongs.sort((a, b) => (a.trackNumber || 999) - (b.trackNumber || 999));
+
+    // Re-assign trackNumber sequentially after sort to fill any gaps
+    normalisedSongs.forEach((t, i) => { t.trackNumber = i + 1; });
 
     return {
-      album: albumInfo,
-      tracks: songs.map((song, idx) => {
-        const t = normalizeTrack({ ...song, al: song.al || song.album || album }) || {};
-        return {
-          ...t,
-          trackNumber: song.no || idx + 1,
-          cover: t.cover || albumInfo.cover,
-          album: t.album || albumInfo.title,
-          albumId: albumInfo.id
-        };
-      }).filter(t => t.id)
+      album: { ...albumInfo, tracksCount: normalisedSongs.length },
+      tracks: normalisedSongs
     };
   }
 
