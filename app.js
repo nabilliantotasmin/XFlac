@@ -453,40 +453,60 @@
       return;
     }
 
-    tracks.forEach((t, idx) => {
+    // Build initial track objects with single provider
+    const trackObjects = tracks.map((t) => {
       const cover = t.cover || albumInfo?.cover || '';
-      // Build a minimal unified-like track object so download modal works
-      const trackObj = {
-        id:       t.id,
-        title:    t.title,
-        artist:   t.artist || albumInfo?.artist || '',
-        album:    albumInfo?.title || '',
-        cover:    cover,
-        duration: t.duration || 0,
-        isrc:     t.isrc || '',
-        // Tag with provider so download modal resolves correctly
+      return {
+        id:        t.id,
+        title:     t.title,
+        artist:    t.artist || albumInfo?.artist || '',
+        album:     albumInfo?.title || '',
+        cover:     cover,
+        duration:  t.duration || 0,
+        isrc:      t.isrc || '',
+        trackNumber: t.trackNumber,
         _provider: prov,
         providers: providersData.filter(p => p.key === prov).map(p => ({
           key: p.key, name: p.name, icon: p.icon,
           trackId: t.id, canStream: p.canStream || false, qualities: p.qualities || []
         }))
       };
+    });
 
+    // Render rows dulu dengan 1 provider
+    renderAlbumTrackRows(trackObjects, albumInfo);
+
+    // Enrich providers secara background via unified search
+    enrichAlbumTracksProviders(trackObjects, albumInfo);
+  }
+
+  /**
+   * Render baris track di album. trackObjects sudah berisi providers[].
+   */
+  function renderAlbumTrackRows(trackObjects, albumInfo) {
+    el.albumTracksList.innerHTML = '';
+    trackObjects.forEach((trackObj, idx) => {
+      const cover = trackObj.cover || albumInfo?.cover || '';
       const row = document.createElement('div');
       row.className = 'track-row';
+      row.dataset.trackIdx = idx;
       row.innerHTML = `
-        <span class="track-row-num">${t.trackNumber || idx + 1}</span>
+        <span class="track-row-num">${trackObj.trackNumber || idx + 1}</span>
         <img class="track-row-cover" src="${cover}" alt="" onerror="this.style.visibility='hidden'">
         <div class="track-row-info">
-          <div class="track-row-title">${esc(t.title)}</div>
-          <div class="track-row-artist">${esc(t.artist || albumInfo?.artist || '')}</div>
+          <div class="track-row-title">${esc(trackObj.title)}</div>
+          <div class="track-row-artist">${esc(trackObj.artist || albumInfo?.artist || '')}</div>
         </div>
-        <span class="track-row-dur">${fmtDur(t.duration)}</span>
+        <span class="track-row-dur">${fmtDur(trackObj.duration)}</span>
+        <div class="track-row-providers" style="display:flex;gap:2px;align-items:center;font-size:0.75rem"></div>
         <div class="track-row-actions">
           <button class="btn-stream-sm" title="Stream / Play"><i class="fas fa-bolt"></i></button>
           <button class="btn-dl-sm" title="Download"><i class="fas fa-download"></i></button>
         </div>
       `;
+
+      // Render provider chips awal
+      updateTrackRowProviderChips(row, trackObj.providers);
 
       row.querySelector('.btn-stream-sm').addEventListener('click', e => {
         e.stopPropagation(); handleStream(trackObj);
@@ -497,6 +517,106 @@
 
       el.albumTracksList.appendChild(row);
     });
+  }
+
+  /** Update provider chips di baris track */
+  function updateTrackRowProviderChips(rowEl, providers) {
+    const chipsEl = rowEl.querySelector('.track-row-providers');
+    if (!chipsEl) return;
+    chipsEl.innerHTML = (providers || [])
+      .map(p => `<span class="chip" title="${p.name}">${p.icon}</span>`)
+      .join('');
+  }
+
+  /**
+   * Setelah render awal, lakukan unified search untuk setiap track
+   * agar provider yang tersedia dari semua layanan bisa digabungkan.
+   * Search dilakukan per-track menggunakan "Artist Title" sebagai query,
+   * lalu cocokkan berdasarkan ISRC atau title+artist+durasi (mirip logika dedup backend).
+   */
+  async function enrichAlbumTracksProviders(trackObjects, albumInfo) {
+    // Buat query dari nama artist + album untuk cari semua track sekaligus
+    const artist = albumInfo?.artist || trackObjects[0]?.artist || '';
+    const album  = albumInfo?.title  || trackObjects[0]?.album  || '';
+    if (!artist && !album) return;
+
+    const searchQuery = [artist, album].filter(Boolean).join(' ');
+
+    let unifiedTracks = [];
+    try {
+      const r = await fetch(`/api/unified-search?q=${encodeURIComponent(searchQuery)}&limit=20`);
+      const d = await r.json();
+      if (d.error) return;
+      unifiedTracks = d.tracks || [];
+    } catch { return; }
+
+    if (!unifiedTracks.length) return;
+
+    // Cocokkan setiap track album ke hasil unified search
+    trackObjects.forEach((trackObj, idx) => {
+      const match = findMatchInUnified(trackObj, unifiedTracks);
+      if (!match) return;
+
+      // Gabungkan providers dari unified ke track
+      let updated = false;
+      (match.providers || []).forEach(up => {
+        if (!trackObj.providers.find(p => p.key === up.key)) {
+          trackObj.providers.push(up);
+          updated = true;
+        }
+      });
+
+      // Isi field kosong dari unified result
+      if (!trackObj.isrc && match.isrc) trackObj.isrc = match.isrc;
+      if (!trackObj.cover && match.cover) trackObj.cover = match.cover;
+
+      // Update UI jika ada provider baru
+      if (updated) {
+        const row = el.albumTracksList.querySelector(`[data-track-idx="${idx}"]`);
+        if (row) updateTrackRowProviderChips(row, trackObj.providers);
+      }
+    });
+  }
+
+  /**
+   * Cari track yang cocok dari array unified tracks.
+   * Menggunakan ISRC exact match atau title+artist fuzzy match + durasi.
+   */
+  function findMatchInUnified(track, unifiedTracks) {
+    const fz = s => String(s || '').toLowerCase().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+
+    const titleA  = fz(track.title);
+    const artistA = fz(track.artist);
+    const durA    = track.duration || 0;
+
+    return unifiedTracks.find(u => {
+      // 1. ISRC exact match
+      if (track.isrc && u.isrc && track.isrc === u.isrc) return true;
+
+      const titleB  = fz(u.title);
+      const artistB = fz(u.artist);
+
+      // 2. Title harus mirip
+      const titleMatch = titleA === titleB
+        || (titleA.length > 3 && titleB.startsWith(titleA))
+        || (titleB.length > 3 && titleA.startsWith(titleB));
+      if (!titleMatch) return false;
+
+      // 3. Artist harus ada overlap
+      const artistMatch = artistA === artistB
+        || artistA.includes(artistB)
+        || artistB.includes(artistA);
+      if (!artistMatch) return false;
+
+      // 4. Durasi ±5 detik jika tersedia
+      const durB = u.duration || 0;
+      if (durA > 0 && durB > 0) {
+        return Math.abs(durA - durB) <= 5000;
+      }
+
+      return true;
+    }) || null;
   }
 
 
