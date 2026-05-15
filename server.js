@@ -21,6 +21,16 @@ try {
   console.warn('[server] unifiedSearch not available:', e.message);
 }
 
+// ─── Lyrics Engine ───
+let fetchLyricsFromEngine;
+try {
+  const ly = require('./lib/lyrics');
+  fetchLyricsFromEngine = ly.fetchLyrics;
+  console.log('[server] lyrics engine loaded');
+} catch (e) {
+  console.warn('[server] lyrics engine not available:', e.message);
+}
+
 const PORT = process.env.PORT || 3000;
 // Serve dari folder 'public' kalau ada, fallback ke root folder
 const PUBLIC_DIR = fs.existsSync(path.join(__dirname, 'public'))
@@ -858,6 +868,42 @@ const server = http.createServer(async (req, res) => {
 
 
 
+
+    // ─── LYRICS ──────────────────────────────────────────────────────────────────
+    // GET /api/lyrics?title=&artist=&album=&duration=&isrc=
+    //
+    // Fetches lyrics from multiple providers (Apple, Musixmatch, LRCLIB, Genius,
+    // NetEase, LyricsOvh, Amazon). Returns { lyrics, provider, synced }.
+    // "synced" is true when the lyrics contain LRC timestamps [mm:ss.cs].
+    if (p === '/api/lyrics' && m === 'GET') {
+      const title    = parsed.searchParams.get('title')    || '';
+      const artist   = parsed.searchParams.get('artist')   || '';
+      const album    = parsed.searchParams.get('album')    || '';
+      const duration = parseFloat(parsed.searchParams.get('duration') || '0');
+      const isrc     = parsed.searchParams.get('isrc')     || '';
+
+      if (!title || !artist) return json(res, { error: 'Missing title or artist' }, 400);
+      if (!fetchLyricsFromEngine) return json(res, { lyrics: '', provider: '', synced: false });
+
+      try {
+        const { lyrics, provider } = await fetchLyricsFromEngine({
+          trackName:  title,
+          artistName: artist,
+          albumName:  album,
+          durationS:  duration,
+          isrc,
+          providers: ['apple', 'musixmatch', 'lrclib', 'genius', 'netease', 'lyricsovh', 'amazon']
+        });
+
+        // Detect if lyrics are LRC-synced (contain timestamp tags)
+        const synced = /\[\d{2}:\d{2}[.:]\d{2}\]/.test(lyrics);
+
+        return json(res, { lyrics: lyrics || '', provider: provider || '', synced });
+      } catch (err) {
+        console.error('[lyrics] error:', err.message);
+        return json(res, { lyrics: '', provider: '', synced: false, error: err.message });
+      }
+    }
 
     // ─── UNIFIED SEARCH ──────────────────────────────────────────────────────────
     // GET /api/unified-search?q=<query>&limit=<n>&providers=<csv>
