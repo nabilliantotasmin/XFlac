@@ -846,113 +846,46 @@ const server = http.createServer(async (req, res) => {
 
 
     // ─── STREAM URL RESOLVER ────────────────────────────────────────────────────
-    // GET /api/stream-url?provider=deezer&id=123456789&quality=6&duration=180000
+    // GET /api/stream-url?provider=qobuz&id=123456789&quality=6
     // Returns { streamUrl, proxyUrl, encrypted, format } — no file written to disk
-    //
-    // duration (ms) is optional — when provided the proxy will reject streams
-    // whose Content-Length is suspiciously small (likely 30s preview clips).
+    // Only providers that implement getStreamUrlOnly() support this endpoint.
+    // Tidal, Deezer, and Amazon do NOT implement getStreamUrlOnly — they require
+    // download first (full offline download) before playback.
     if (p === '/api/stream-url' && m === 'GET') {
       const prov     = parsed.searchParams.get('provider');
       const trackId  = parsed.searchParams.get('id');
       const quality  = parsed.searchParams.get('quality') || '6';
-      // expected track duration in milliseconds (sent by the frontend from track metadata)
-      const trackDurationMs = parseInt(parsed.searchParams.get('duration') || '0', 10) || 0;
 
       if (!trackId) return json(res, { error: 'Missing id' }, 400);
 
       const provObj = providers[prov];
       if (!provObj) return json(res, { error: 'Unknown provider' }, 400);
       if (typeof provObj.getStreamUrlOnly !== 'function')
-        return json(res, { error: `Provider "${prov}" does not support direct streaming` }, 400);
+        return json(res, { error: `Provider "${prov}" does not support direct streaming. Please download the track first.` }, 400);
 
       try {
         const result = await provObj.getStreamUrlOnly(trackId, quality);
 
         // Normalise result from all providers into a unified shape
-        const remoteUrl  = typeof result === 'string' ? result : result.url || result.streamUrl;
-        const encrypted  = typeof result === 'string' ? false  : !!(result.encrypted || result.decryptionKey);
-        const format     = typeof result === 'string' ? 'flac' : (result.format || result.codec || 'flac');
-
-        // For Deezer (Blowfish), result.key is not a raw key — we pass the track ID
-        // so the proxy can re-derive the Blowfish key (same logic as deezer.js).
-        // For Amazon, result.decryptionKey is the actual AES/CBCS key for ffmpeg.
-        const decKey = typeof result === 'string' ? ''
-          : (result.decryptionKey || '')   // Amazon: raw hex key
-          || (result.encrypted ? trackId : ''); // Deezer: store track ID for key derivation
+        const remoteUrl = typeof result === 'string' ? result : result.url || result.streamUrl;
+        const encrypted = typeof result === 'string' ? false  : !!(result.encrypted || result.decryptionKey);
+        const format    = typeof result === 'string' ? 'flac' : (result.format || result.codec || 'flac');
+        const decKey    = typeof result === 'string' ? ''
+          : (result.decryptionKey || '') || (result.encrypted ? trackId : '');
 
         if (!remoteUrl) return json(res, { error: 'Resolver returned no URL' }, 502);
 
-        // ── Preview guard: HEAD-check Content-Length vs expected duration ──────
-        // For non-encrypted streams on providers known to sometimes return 30-second
-        // previews (Tidal, Deezer, Amazon), we do a quick HEAD request and compare
-        // the file size to the minimum expected bytes for the track's full duration.
-        //
-        // Rules-of-thumb (conservative lower bounds):
-        //   MP3 ~128kbps  → ~16 KB/s
-        //   AAC/M4A ~128kbps → ~16 KB/s
-        //   FLAC ~800kbps  → ~100 KB/s
-        //
-        // We use 12 KB/s as a universal minimum floor (well below any real 128kbps
-        // stream) so we only reject files that are clearly 30-second clips.
-        const PREVIEW_GUARD_PROVIDERS = new Set(['tidal', 'deezer', 'amazon']);
-        if (
-          !encrypted &&
-          trackDurationMs > 0 &&
-          PREVIEW_GUARD_PROVIDERS.has(prov)
-        ) {
-          try {
-            const headClient = remoteUrl.startsWith('https') ? require('https') : require('http');
-            const contentLength = await new Promise((resolve) => {
-              const req = headClient.request(remoteUrl, {
-                method: 'HEAD',
-                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; XenoFlac/1.0)', 'Accept': '*/*' },
-                timeout: 6000
-              }, (r) => {
-                r.resume();
-                resolve(parseInt(r.headers['content-length'] || '0', 10) || 0);
-              });
-              req.on('error', () => resolve(0));
-              req.on('timeout', () => { req.destroy(); resolve(0); });
-              req.end();
-            });
-
-            if (contentLength > 0) {
-              const trackDurationSec = trackDurationMs / 1000;
-              const minExpectedBytes = trackDurationSec * 12 * 1024; // 12 KB/s floor
-              if (contentLength < minExpectedBytes) {
-                console.warn(
-                  `[stream-url] ${prov}/${trackId}: Content-Length=${contentLength} < ` +
-                  `minExpected=${Math.floor(minExpectedBytes)} (${Math.round(trackDurationSec)}s track) — ` +
-                  `likely 30s preview, rejecting`
-                );
-                return json(res, {
-                  error: `Preview URL detected for ${prov}: stream is too short for a ${Math.round(trackDurationSec)}s track. ` +
-                         `The track may be unavailable in full via the current resolver APIs.`
-                }, 502);
-              }
-              console.log(`[stream-url] ${prov}/${trackId}: Content-Length=${contentLength} OK (min=${Math.floor(minExpectedBytes)})`);
-            }
-          } catch (headErr) {
-            // Non-fatal — proceed without the guard if HEAD fails
-            console.warn(`[stream-url] HEAD check failed for ${prov}/${trackId}: ${headErr.message}`);
-          }
-        }
-
-        // Build the proxy URL the browser will use.
-        // We base64url-encode the remote URL + metadata so the proxy endpoint
-        // can reconstruct it without storing anything server-side.
         const meta = Buffer.from(JSON.stringify({
           url: remoteUrl,
           enc: encrypted,
           key: decKey,
           fmt: format,
-          prov,
-          dur: trackDurationMs  // propagate duration so proxy can also sanity-check
+          prov
         })).toString('base64url');
 
         return json(res, {
           proxyUrl:  `/api/proxy-stream?t=${meta}`,
-          streamUrl: remoteUrl,   // raw CDN URL (useful for debugging)
+          streamUrl: remoteUrl,
           encrypted,
           format,
           provider: prov
@@ -978,18 +911,8 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(400); return res.end('Invalid token');
       }
 
-      const { url: remoteUrl, enc: encrypted, key: decKey, fmt: format, prov, dur: proxyTrackDurMs } = meta;
+      const { url: remoteUrl, enc: encrypted, key: decKey, fmt: format, prov } = meta;
       if (!remoteUrl) { res.writeHead(400); return res.end('No remote URL'); }
-
-      // ── Inline preview guard for non-encrypted streams ────────────────────
-      // Abort immediately if Content-Length from CDN is clearly too small
-      // for the track's expected duration (i.e. a 30-second preview clip).
-      const PROXY_PREVIEW_GUARD_PROVIDERS = new Set(['tidal', 'deezer', 'amazon']);
-      function isProxyStreamTooShort(contentLength, trackDurMs) {
-        if (!contentLength || !trackDurMs || contentLength <= 0 || trackDurMs <= 0) return false;
-        const minExpected = (trackDurMs / 1000) * 12 * 1024; // 12 KB/s floor
-        return contentLength < minExpected;
-      }
 
       const MIME_MAP = {
         flac: 'audio/flac', mp3: 'audio/mpeg', m4a: 'audio/mp4',
@@ -1030,24 +953,6 @@ const server = http.createServer(async (req, res) => {
       if (!encrypted) {
         try {
           const remote = await fetchRemote(remoteUrl, rangeHeader);
-
-          // Preview guard: reject streams that are too small for the track duration
-          if (
-            PROXY_PREVIEW_GUARD_PROVIDERS.has(prov) &&
-            !rangeHeader &&
-            proxyTrackDurMs > 0
-          ) {
-            const cl = parseInt(remote.headers['content-length'] || '0', 10) || 0;
-            if (isProxyStreamTooShort(cl, proxyTrackDurMs)) {
-              remote.stream.resume(); // drain and discard
-              const trackSec = Math.round(proxyTrackDurMs / 1000);
-              console.warn(`[proxy-stream] ${prov}: Content-Length=${cl} too small for ${trackSec}s track — likely preview, aborting`);
-              res.writeHead(502, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-              return res.end(JSON.stringify({
-                error: `Preview stream detected (${cl} bytes for a ${trackSec}s track). Full audio is not available via current resolver APIs.`
-              }));
-            }
-          }
 
           const status = remote.statusCode === 206 ? 206 : 200;
           const outHeaders = {
