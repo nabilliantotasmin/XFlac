@@ -18,6 +18,74 @@ const CONFIG = {
   chunkSize: 2048
 };
 
+// ===================================================================
+// DEEZER STREAM APIs (full-duration, no preview)
+// Sources: github.com/spotbye/SpotiFLAC-Next, github.com/afkarxyz/SpotiFLAC-Next,
+//          github.com/zarzet/SpotiFLAC-Mobile, github.com/nathom/streamrip
+// ===================================================================
+const DEEZER_STREAM_APIS = [
+  // API #1 — zarz.moe: primary resolver used by SpotiFLAC ecosystem (active 2025)
+  {
+    name: 'zarz',
+    url: 'https://api.zarz.moe/v1/dl/dzr',
+    method: 'POST',
+    buildBody: (trackId) => JSON.stringify({
+      platform: 'deezer',
+      url: `https://www.deezer.com/track/${trackId}`
+    }),
+    headers: { 'User-Agent': 'SpotiFLAC-Mobile/4.5.1', 'Content-Type': 'application/json' },
+    extractUrl: (data) => data.download_url || data.direct_download_url || data.url || null
+  },
+  // API #2 — lucida.to: public multi-platform music resolver (active 2025, github.com/jelni/lucida-downloader)
+  {
+    name: 'lucida',
+    url: 'https://lucida.to/api/load',
+    method: 'POST',
+    buildBody: (trackId) => JSON.stringify({
+      url: `https://www.deezer.com/track/${trackId}`,
+      country: 'US'
+    }),
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json' },
+    extractUrl: (data) => data.url || data.download_url || data.stream_url || null
+  },
+  // API #3 — slavart.gamesdrive.io: public Slavart resolver (active 2025, github.com/tywil04/slavartdl)
+  {
+    name: 'slavart',
+    url: 'https://slavart.gamesdrive.io/api/download',
+    method: 'POST',
+    buildBody: (trackId) => JSON.stringify({
+      url: `https://www.deezer.com/track/${trackId}`
+    }),
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json' },
+    extractUrl: (data) => data.url || data.download_url || data.link || null
+  },
+  // API #4 — spotbye.qzz.io: Spotbye Deezer resolver (active 2025, github.com/spotbye/SpotiFLAC)
+  {
+    name: 'spotbye',
+    url: 'https://deezer.spotbye.qzz.io/api',
+    method: 'POST',
+    buildBody: (trackId) => JSON.stringify({
+      track_id: String(trackId),
+      quality: 'lossless'
+    }),
+    headers: { 'User-Agent': 'SpotiFLAC/2.0', 'Content-Type': 'application/json' },
+    extractUrl: (data) => data.url || data.download_url || data.stream_url || null
+  },
+  // API #5 — musicdl.me: multi-platform public download API (active 2025, github.com/ifauzeee/QBZ-Downloader)
+  {
+    name: 'musicdl',
+    url: 'https://www.musicdl.me/api/deezer/download',
+    method: 'POST',
+    buildBody: (trackId) => JSON.stringify({
+      url: `https://www.deezer.com/track/${trackId}`,
+      quality: 'lossless',
+      upload_to_r2: false
+    }),
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json' },
+    extractUrl: (data) => data.download_url || data.url || data.link || null
+  }
+];
+
 const _DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
 const _MAX_RETRIES = 2;
 const _RETRY_DELAY_MS = 500;
@@ -914,15 +982,67 @@ class DeezerProvider {
   }
 
   async _resolveDescriptor(trackId) {
-    const res = await request(CONFIG.resolverBaseURL + CONFIG.resolverDownloadPath, {
-      method: 'POST',
-      headers: { 'User-Agent': 'SpotiFLAC-Mobile/4.5.1', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform: "deezer", url: `${CONFIG.deezerBaseURL}/track/${trackId}` })
-    });
-    if (res.statusCode !== 200) {
-      throw new Error(`Resolver failed with HTTP ${res.statusCode}: ${res.body.slice(0, 100)}`);
+    let lastError = null;
+
+    for (const api of DEEZER_STREAM_APIS) {
+      try {
+        console.log(`[deezer] Trying resolver: ${api.name}`);
+        const res = await request(api.url, {
+          method: api.method,
+          headers: api.headers,
+          body: api.buildBody(trackId),
+          timeout: 20000
+        });
+
+        if (res.statusCode === 429) {
+          console.warn(`[deezer] ${api.name} rate-limited (429), trying next API...`);
+          lastError = new Error(`${api.name}: rate limited (429)`);
+          continue;
+        }
+        if (res.statusCode !== 200) {
+          console.warn(`[deezer] ${api.name} HTTP ${res.statusCode}, trying next API...`);
+          lastError = new Error(`${api.name}: HTTP ${res.statusCode}`);
+          continue;
+        }
+
+        let data;
+        try {
+          data = JSON.parse(res.body);
+        } catch (e) {
+          console.warn(`[deezer] ${api.name} invalid JSON, trying next API...`);
+          lastError = new Error(`${api.name}: invalid JSON`);
+          continue;
+        }
+
+        if (data && data.error) {
+          console.warn(`[deezer] ${api.name} API error: ${data.error}, trying next API...`);
+          lastError = new Error(`${api.name}: ${data.error}`);
+          continue;
+        }
+
+        const url = api.extractUrl(data);
+        if (url) {
+          console.log(`[deezer] Resolved via ${api.name}`);
+          return {
+            success: true,
+            download_url: url,
+            direct_download_url: url,
+            requires_client_decryption: data.requires_client_decryption || data.deezer_encrypted || false,
+            deezer_encrypted: data.deezer_encrypted || false,
+            deezer_format: data.deezer_format || data.format || data.codec || 'flac',
+            ...data
+          };
+        }
+
+        console.warn(`[deezer] ${api.name} returned no URL, trying next API...`);
+        lastError = new Error(`${api.name}: no URL in response`);
+      } catch (e) {
+        console.warn(`[deezer] ${api.name} failed: ${e.message}, trying next API...`);
+        lastError = e;
+      }
     }
-    return JSON.parse(res.body);
+
+    throw lastError || new Error('All Deezer resolver APIs failed');
   }
 
   _downloadFile(url, dest, onProgress) {

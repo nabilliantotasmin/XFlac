@@ -28,6 +28,123 @@ const CONFIG = {
   defaultUA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
 };
 
+// ===================================================================
+// AMAZON STREAM APIs (full-duration, no preview)
+// Sources: github.com/spotbye/SpotiFLAC-Next, github.com/afkarxyz/SpotiFLAC-Next,
+//          github.com/zarzet/SpotiFLAC-Mobile, github.com/jelni/lucida-downloader,
+//          github.com/tywil04/slavartdl
+// ===================================================================
+const AMAZON_STREAM_APIS = [
+  // API #1 — zarz.moe: primary resolver, SpotiFLAC ecosystem (active 2025)
+  {
+    name: 'zarz',
+    buildUrl: (asin, codec) =>
+      `https://api.zarz.moe/v1/dl/amazeamazeamaze/media?asin=${encodeURIComponent(asin)}&codec=${encodeURIComponent(codec || 'flac')}`,
+    method: 'GET',
+    buildBody: () => null,
+    headers: { 'User-Agent': 'SpotiFLAC-Mobile/4.5.1', 'Accept': 'application/json' },
+    extractResult: (data) => {
+      // zarz returns array or object with audio sub-object
+      const d = Array.isArray(data) ? data[0] : data;
+      if (!d || !d.audio) return null;
+      const url = d.audio.url || d.audio.streamUrl || (d.audio.urls && d.audio.urls[0]) || '';
+      if (!url) return null;
+      return {
+        streamUrl: url,
+        decryptionKey: (d.audio.key || '').trim(),
+        codec: d.audio.codec || 'flac',
+        sampleRate: d.audio.sampleRate || 0,
+        coverUrl: d.cover ? d.cover.replace('{size}','1200').replace('{jpegQuality}','94').replace('{format}','jpg') : ''
+      };
+    }
+  },
+  // API #2 — lucida.to: public multi-platform music resolver (active 2025, github.com/jelni/lucida-downloader)
+  {
+    name: 'lucida',
+    buildUrl: () => 'https://lucida.to/api/load',
+    method: 'POST',
+    buildBody: (asin) => JSON.stringify({
+      url: `https://music.amazon.com/tracks/${asin}`,
+      country: 'US'
+    }),
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json' },
+    extractResult: (data) => {
+      const url = data.url || data.download_url || data.stream_url || null;
+      if (!url) return null;
+      return {
+        streamUrl: url,
+        decryptionKey: data.decryptionKey || data.key || '',
+        codec: data.codec || data.format || 'flac',
+        sampleRate: data.sampleRate || 0,
+        coverUrl: data.cover || data.coverUrl || ''
+      };
+    }
+  },
+  // API #3 — slavart.gamesdrive.io: public Slavart resolver (active 2025, github.com/tywil04/slavartdl)
+  {
+    name: 'slavart',
+    buildUrl: () => 'https://slavart.gamesdrive.io/api/download',
+    method: 'POST',
+    buildBody: (asin) => JSON.stringify({
+      url: `https://music.amazon.com/tracks/${asin}`
+    }),
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json' },
+    extractResult: (data) => {
+      const url = data.url || data.download_url || data.link || null;
+      if (!url) return null;
+      return {
+        streamUrl: url,
+        decryptionKey: data.decryptionKey || data.key || '',
+        codec: data.codec || data.format || 'flac',
+        sampleRate: data.sampleRate || 0,
+        coverUrl: data.cover || ''
+      };
+    }
+  },
+  // API #4 — spotbye.qzz.io: Spotbye Amazon Music resolver (active 2025, github.com/spotbye/SpotiFLAC)
+  {
+    name: 'spotbye',
+    buildUrl: (asin) => `https://amazon.spotbye.qzz.io/api/track/${asin}`,
+    method: 'GET',
+    buildBody: () => null,
+    headers: { 'User-Agent': 'SpotiFLAC/2.0' },
+    extractResult: (data) => {
+      const url = data.streamUrl || data.url || data.download_url || null;
+      if (!url) return null;
+      return {
+        streamUrl: url,
+        decryptionKey: (data.decryptionKey || data.key || '').trim(),
+        codec: data.codec || data.format || 'flac',
+        sampleRate: data.sampleRate || 0,
+        coverUrl: data.cover || data.coverUrl || ''
+      };
+    }
+  },
+  // API #5 — musicdl.me: multi-platform public download API (active 2025, github.com/ifauzeee/QBZ-Downloader)
+  {
+    name: 'musicdl',
+    buildUrl: () => 'https://www.musicdl.me/api/amazon/download',
+    method: 'POST',
+    buildBody: (asin) => JSON.stringify({
+      url: `https://music.amazon.com/tracks/${asin}`,
+      quality: 'lossless',
+      upload_to_r2: false
+    }),
+    headers: { 'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json' },
+    extractResult: (data) => {
+      const url = data.download_url || data.url || data.link || null;
+      if (!url) return null;
+      return {
+        streamUrl: url,
+        decryptionKey: data.decryptionKey || data.key || '',
+        codec: data.codec || data.format || 'flac',
+        sampleRate: data.sampleRate || 0,
+        coverUrl: data.cover || data.coverUrl || ''
+      };
+    }
+  }
+];
+
 // ─── Spotbye Debug Key (AES-GCM) ───
 const _AMAZON_DEBUG_KEY_SEED = Buffer.from("spotiflac:amazon:spotbye:api:v1");
 const _AMAZON_DEBUG_KEY_AAD = Buffer.from([
@@ -1118,6 +1235,72 @@ async function callZarzMedia(asin, codec) {
   }
 }
 
+// ==================== Multi-API Stream Resolver ====================
+// Iterates through AMAZON_STREAM_APIS in order, returns first successful result
+
+async function callAmazonStreamApis(asin, codec) {
+  if (!codec) codec = 'flac';
+  let lastError = null;
+
+  for (const api of AMAZON_STREAM_APIS) {
+    try {
+      console.log(`[Amazon] Trying stream API: ${api.name}`);
+      const url = api.buildUrl(asin, codec);
+      const body = api.buildBody ? api.buildBody(asin, codec) : null;
+
+      const res = await request(url, {
+        method: api.method || 'GET',
+        headers: api.headers || {},
+        body: body,
+        timeout: 20000
+      });
+
+      if (res.statusCode === 429) {
+        let retryAfter = 30;
+        try { retryAfter = JSON.parse(res.body).retry_after || 30; } catch (e) {}
+        console.warn(`[Amazon] ${api.name} rate-limited (429), retry_after=${retryAfter}s — trying next API...`);
+        lastError = new Error(`${api.name}: rate limited (429)`);
+        continue;
+      }
+
+      if (res.statusCode !== 200) {
+        console.warn(`[Amazon] ${api.name} HTTP ${res.statusCode} — trying next API...`);
+        lastError = new Error(`${api.name}: HTTP ${res.statusCode}`);
+        continue;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(res.body);
+      } catch (e) {
+        console.warn(`[Amazon] ${api.name} invalid JSON — trying next API...`);
+        lastError = new Error(`${api.name}: invalid JSON`);
+        continue;
+      }
+
+      if (data && data.error) {
+        console.warn(`[Amazon] ${api.name} API error: ${data.error} — trying next API...`);
+        lastError = new Error(`${api.name}: ${data.error}`);
+        continue;
+      }
+
+      const result = api.extractResult(data);
+      if (result && result.streamUrl) {
+        console.log(`[Amazon] Resolved via ${api.name} — codec=${result.codec}`);
+        return result;
+      }
+
+      console.warn(`[Amazon] ${api.name} no stream URL — trying next API...`);
+      lastError = new Error(`${api.name}: no stream URL in response`);
+    } catch (e) {
+      console.warn(`[Amazon] ${api.name} exception: ${e.message} — trying next API...`);
+      lastError = e;
+    }
+  }
+
+  return { error: lastError ? lastError.message : 'All Amazon stream APIs failed' };
+}
+
 // ==================== File Download Helper ====================
 
 function downloadFile(url, dest, onProgress) {
@@ -1262,24 +1445,24 @@ class AmazonProvider {
     const codec = qualityToCodec(quality);
     console.log(`[Amazon] Download start: ASIN=${asin} quality=${quality} codec=${codec}`);
 
-    // Call Zarz directly (no fetchWithRetry wrapper — like extension does)
-    let apiResult = await callZarzMedia(asin, codec);
+    // Try all AMAZON_STREAM_APIS with requested codec first
+    let apiResult = await callAmazonStreamApis(asin, codec);
 
-    // If requested codec fails, try fallback chain
+    // If all APIs fail with requested codec, try fallback codec chain
     const fallbackChain = ["mha1", "eac3", "opus", "flac"].filter(c => c !== codec);
 
     if (apiResult && apiResult.error) {
-      console.log(`[Amazon] Primary codec ${codec} failed: ${apiResult.error}`);
+      console.log(`[Amazon] All APIs failed for codec ${codec}: ${apiResult.error}`);
 
       for (const fb of fallbackChain) {
-        console.log(`[Amazon] Trying fallback codec: ${fb}`);
-        apiResult = await callZarzMedia(asin, fb);
+        console.log(`[Amazon] Trying fallback codec across all APIs: ${fb}`);
+        apiResult = await callAmazonStreamApis(asin, fb);
         if (apiResult && !apiResult.error) {
-          console.log(`[Amazon] Fallback ${fb} succeeded`);
+          console.log(`[Amazon] Fallback codec ${fb} succeeded`);
           break;
         }
         if (apiResult && apiResult.error) {
-          console.log(`[Amazon] Fallback ${fb} failed: ${apiResult.error}`);
+          console.log(`[Amazon] Fallback codec ${fb} also failed: ${apiResult.error}`);
         }
       }
     }
