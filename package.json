@@ -1,0 +1,22 @@
+{
+  "name": "spotiflac-simple",
+  "version": "1.1.0",
+  "description": "Simple multi-provider music downloader",
+  "main": "cli.js",
+  "scripts": {
+    "start": "node cli.js",
+    "server": "node server.js"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "egoroof-blowfish": "^4.0.1",
+    "inquirer": "^8.2.6"
+  },
+  "providers": [
+    "deezer",
+    "qobuz", 
+    "amazon",
+    "tidal",
+    "pandora"
+  ]
+}
