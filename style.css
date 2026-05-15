@@ -660,3 +660,65 @@ select option { background: var(--bg-color); color: var(--text-primary); }
   .player-download { right: 3.3rem; }
   .player-close { right: 0.9rem; }
 }
+
+
+
+/* ── Unified Track Card ─────────────────────────────────────────────────── */
+.track-card--unified .track-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: default;
+  transition: transform 0.15s;
+}
+.provider-chip:hover { transform: scale(1.15); }
+
+/* ── Download Modal: Provider Picker ────────────────────────────────────── */
+#provider-picker {
+  margin-bottom: 12px;
+}
+.provider-pick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+.provider-pick-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.provider-pick-btn.selected,
+.provider-pick-btn[aria-pressed="true"] {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+.provider-pick-icon { font-size: 1rem; }
+.provider-pick-name { font-weight: 500; }
+.provider-pick-badge {
+  font-size: 0.7rem;
+  padding: 1px 6px;
+  border-radius: 20px;
+  background: rgba(34, 211, 238, 0.2);
+  color: #22d3ee;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  white-space: nowrap;
+}
