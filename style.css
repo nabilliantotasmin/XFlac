@@ -481,9 +481,11 @@ select option { background: var(--bg-color); color: var(--text-primary); }
 .library-play,
 .library-download,
 .track-card-play,
+.track-card-play-dl,
 .track-card-stream,
 .track-card-download,
 .track-item-play,
+.track-item-play-dl,
 .track-item-stream,
 .player-download,
 .player-close {
@@ -508,6 +510,13 @@ select option { background: var(--bg-color); color: var(--text-primary); }
   border-color: transparent;
   color: #fff;
 }
+/* Play (download-then-play) buttons — green gradient untuk deezer/tidal/amazon */
+.track-card-play-dl,
+.track-item-play-dl {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+  border-color: transparent;
+  color: #fff;
+}
 /* Stream buttons — amber/lightning style */
 .track-card-stream,
 .track-item-stream {
@@ -518,9 +527,11 @@ select option { background: var(--bg-color); color: var(--text-primary); }
 .library-play:hover,
 .library-download:hover,
 .track-card-play:hover,
+.track-card-play-dl:hover,
 .track-card-stream:hover,
 .track-card-download:hover,
 .track-item-play:hover,
+.track-item-play-dl:hover,
 .track-item-stream:hover,
 .track-item-download:hover,
 .player-download:hover,
@@ -534,6 +545,11 @@ select option { background: var(--bg-color); color: var(--text-primary); }
 .track-item-stream:hover {
   background: #e67e22;
   border-color: #e67e22;
+}
+.track-card-play-dl:hover,
+.track-item-play-dl:hover {
+  background: #16a34a;
+  border-color: #16a34a;
 }
 
 /* Track card play/download actions */
