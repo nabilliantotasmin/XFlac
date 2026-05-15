@@ -981,6 +981,20 @@ class DeezerProvider {
     return finalPath;
   }
 
+  /**
+   * Resolve a direct stream URL for a Deezer track WITHOUT downloading.
+   * Returns { url, encrypted, format } or throws.
+   */
+  async getStreamUrlOnly(trackId) {
+    const desc = await this._resolveDescriptor(trackId);
+    if (!desc || !desc.download_url) throw new Error('Could not resolve Deezer stream URL');
+    return {
+      url: desc.download_url,
+      encrypted: !!(desc.requires_client_decryption || desc.deezer_encrypted),
+      format: desc.deezer_format || 'flac'
+    };
+  }
+
   async _resolveDescriptor(trackId) {
     let lastError = null;
 

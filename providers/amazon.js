@@ -1331,6 +1331,18 @@ class AmazonProvider {
     this.name = 'Amazon';
   }
 
+  /**
+   * Resolve a direct stream URL for an Amazon track WITHOUT downloading.
+   * Returns { streamUrl, decryptionKey, codec } or throws.
+   */
+  async getStreamUrlOnly(asin, quality = 'flac') {
+    const codec = qualityToCodec(quality);
+    const result = await callAmazonStreamApis(asin, codec);
+    if (result && result.error) throw new Error(`Amazon stream resolve failed: ${result.error}`);
+    if (!result || !result.streamUrl) throw new Error('Could not resolve Amazon stream URL');
+    return result;
+  }
+
   // ── Search Tracks ──
   async search(query, limit = 8) {
     const data = await fetchWithRetry(() => callShowSearch(query));

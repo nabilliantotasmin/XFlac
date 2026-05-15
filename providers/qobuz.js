@@ -110,6 +110,15 @@ class QobuzProvider {
     }));
   }
 
+  /**
+   * Resolve a direct stream URL for a Qobuz track WITHOUT downloading.
+   * Returns the raw CDN URL string or throws.
+   */
+  async getStreamUrlOnly(trackId, quality = '6') {
+    const q = { 'HI_RES': '27', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
+    return this.getStreamUrl(trackId, q);
+  }
+
   async getStreamUrl(trackId, quality) {
     let lastError = null;
 

@@ -63,6 +63,10 @@ select option { background: var(--bg-color); color: var(--text-primary); }
 .btn-primary.full-width { position: relative; width: 100%; padding: 1rem; margin-top: 1.5rem; right: auto; top: auto; bottom: auto; font-size: 1.1rem; }
 .btn-secondary { display: inline-block; padding: 0.8rem 1.5rem; border-radius: 8px; background: rgba(255, 255, 255, 0.1); border: 1px solid var(--glass-border); color: var(--text-primary); text-decoration: none; font-weight: 600; transition: all var(--transition-speed); margin-top: 1rem; }
 .btn-secondary:hover { background: rgba(255, 255, 255, 0.2); transform: translateY(-2px); }
+/* Stream button — amber gradient, full-width inside modal */
+.btn-stream { display: flex; align-items: center; justify-content: center; gap: 0.5rem; width: 100%; padding: 0.85rem 1rem; margin-top: 0.75rem; border: none; border-radius: 8px; background: linear-gradient(135deg, #f7a825, #e67e22); color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; transition: all var(--transition-speed); }
+.btn-stream:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(247, 168, 37, 0.45); }
+.btn-stream:active { transform: translateY(0); }
 
 /* Results Section */
 .results-section { width: 100%; animation: fadeIn 0.5s ease-out; }
@@ -477,8 +481,10 @@ select option { background: var(--bg-color); color: var(--text-primary); }
 .library-play,
 .library-download,
 .track-card-play,
+.track-card-stream,
 .track-card-download,
 .track-item-play,
+.track-item-stream,
 .player-download,
 .player-close {
   width: 38px;
@@ -502,11 +508,20 @@ select option { background: var(--bg-color); color: var(--text-primary); }
   border-color: transparent;
   color: #fff;
 }
+/* Stream buttons — amber/lightning style */
+.track-card-stream,
+.track-item-stream {
+  background: linear-gradient(135deg, #f7a825, #e67e22);
+  border-color: transparent;
+  color: #fff;
+}
 .library-play:hover,
 .library-download:hover,
 .track-card-play:hover,
+.track-card-stream:hover,
 .track-card-download:hover,
 .track-item-play:hover,
+.track-item-stream:hover,
 .track-item-download:hover,
 .player-download:hover,
 .player-close:hover {
@@ -514,6 +529,11 @@ select option { background: var(--bg-color); color: var(--text-primary); }
   background: var(--accent-primary);
   color: #fff;
   border-color: var(--accent-primary);
+}
+.track-card-stream:hover,
+.track-item-stream:hover {
+  background: #e67e22;
+  border-color: #e67e22;
 }
 
 /* Track card play/download actions */
@@ -533,13 +553,15 @@ select option { background: var(--bg-color); color: var(--text-primary); }
   transform: translate(-50%, -50%) scale(1);
 }
 .track-card-play,
+.track-card-stream,
 .track-card-download {
   width: 50px;
   height: 50px;
   font-size: 1.1rem;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
-.track-item-play {
+.track-item-play,
+.track-item-stream {
   width: 36px;
   height: 36px;
 }
