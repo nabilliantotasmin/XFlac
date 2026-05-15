@@ -808,6 +808,14 @@ img { display: block; }
 .artist-card-cta i { transition: transform .2s; margin-left: 3px; }
 .artist-card:hover .artist-card-cta i { transform: translateX(4px); }
 
+/* Provider chips inside artist card */
+.artist-card-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: .3rem;
+}
+
 /* ═══════════════════════════════════════════════════════════
    ARTIST PROFILE PAGE
    ═══════════════════════════════════════════════════════════ */

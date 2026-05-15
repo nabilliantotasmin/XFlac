@@ -8,10 +8,11 @@ const path = require('path');
 const crypto = require('crypto');
 
 // ─── Unified Search Engine ───
-let unifiedSearch, getProviderMeta, getProvider, getProviderRegistry;
+let unifiedSearch, unifiedArtistSearch, getProviderMeta, getProvider, getProviderRegistry;
 try {
   const us = require('./lib/unifiedSearch');
   unifiedSearch        = us.unifiedSearch;
+  unifiedArtistSearch  = us.unifiedArtistSearch;
   getProviderMeta      = us.getProviderMeta;
   getProvider          = us.getProvider;
   getProviderRegistry  = us.getProviderRegistry;
@@ -894,14 +895,45 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // ─── UNIFIED ARTIST SEARCH ───────────────────────────────────────────────
+    // GET /api/unified-search-artist?q=<query>&limit=<n>
+    //
+    // Mencari artist/publisher dari semua provider (Qobuz, Deezer, Tidal, Amazon)
+    // secara paralel, deduplicate berdasarkan nama, dan menggabungkan metadata.
+    //
+    // Response: { artists: UnifiedArtist[], providerErrors: {}, meta: {} }
+    if (p === '/api/unified-search-artist' && m === 'GET') {
+      const q     = parsed.searchParams.get('q');
+      const limit = Math.min(parseInt(parsed.searchParams.get('limit') || '8', 10), 20);
+
+      if (!q) return json(res, { error: 'Missing query' }, 400);
+      if (!unifiedArtistSearch) return json(res, { error: 'Unified artist search engine not available' }, 500);
+
+      try {
+        const { artists, providerErrors } = await unifiedArtistSearch(q, limit, 10000);
+        return json(res, {
+          artists,
+          providerErrors,
+          meta: {
+            query:  q,
+            total:  artists.length,
+            providers: Object.keys(providerErrors).length
+              ? `${4 - Object.keys(providerErrors).length}/4 providers responded`
+              : 'all providers responded'
+          }
+        });
+      } catch (err) {
+        console.error('[unified-search-artist] error:', err.message);
+        return json(res, { error: err.message }, 500);
+      }
+    }
+
     // ─── UNIFIED STREAM URL ───────────────────────────────────────────────────
     // GET /api/unified-stream-url?id=<trackId>&provider=qobuz&quality=6
     //
     // Mencoba stream langsung. Hanya Qobuz yang diprioritaskan untuk streaming.
     // Jika provider bukan Qobuz (atau tidak support stream), kembalikan error
     // sehingga UI dapat menampilkan opsi download dari provider lain.
-    //
-    // Ini adalah alias tipis ke /api/stream-url dengan logika prioritas Qobuz.
     if (p === '/api/unified-stream-url' && m === 'GET') {
       const provKey  = parsed.searchParams.get('provider');
       const trackId  = parsed.searchParams.get('id');
