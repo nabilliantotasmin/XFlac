@@ -25,16 +25,11 @@ function safeRequire(p) {
 }
 
 const providers = {
-  deezer:      safeRequire(path.join(PROVIDERS_DIR, 'deezer')),
-  qobuz:       safeRequire(path.join(PROVIDERS_DIR, 'qobuz')),
-  amazon:      safeRequire(path.join(PROVIDERS_DIR, 'amazon')),
-  tidal:       safeRequire(path.join(PROVIDERS_DIR, 'tidal')),
-  pandora:     safeRequire(path.join(PROVIDERS_DIR, 'pandora')),
-  soundcloud:  safeRequire(path.join(PROVIDERS_DIR, 'soundcloud')),
-  bandcamp:    safeRequire(path.join(PROVIDERS_DIR, 'bandcamp')),
-  applemusic:  safeRequire(path.join(PROVIDERS_DIR, 'applemusic')),
-  joox:        safeRequire(path.join(PROVIDERS_DIR, 'joox')),
-  yandexmusic: safeRequire(path.join(PROVIDERS_DIR, 'yandexmusic'))
+  deezer:  safeRequire(path.join(PROVIDERS_DIR, 'deezer')),
+  qobuz:   safeRequire(path.join(PROVIDERS_DIR, 'qobuz')),
+  amazon:  safeRequire(path.join(PROVIDERS_DIR, 'amazon')),
+  tidal:   safeRequire(path.join(PROVIDERS_DIR, 'tidal')),
+  pandora: safeRequire(path.join(PROVIDERS_DIR, 'pandora'))
 };
 
 let tagFile = null;
@@ -312,7 +307,7 @@ function stdTrack(t, source) {
       isrc: t.isrc || ''
     };
   }
-  // Default passthrough untuk provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
+  // Default passthrough untuk provider lainnya
   return {
     id:       String(t.id     || ''),
     title:    t.title         || 'Unknown',
@@ -321,7 +316,7 @@ function stdTrack(t, source) {
     cover:    t.cover         || '',
     duration: t.duration      || 0,
     isrc:     t.isrc          || '',
-    // Pertahankan field khusus provider (misalnya _audioUrl, _appleUrl, dll.)
+    // Pertahankan field khusus provider (misalnya _audioUrl, dll.)
     ...Object.fromEntries(
       Object.entries(t).filter(([k]) => k.startsWith('_'))
     )
@@ -524,16 +519,11 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/providers' && m === 'GET') {
       const list = [
-        { key: 'deezer',      name: 'Deezer',        icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
-        { key: 'qobuz',      name: 'Qobuz',         icon: '💿', qualities: [{name:'27 (Hi-Res Max)',value:'27'},{name:'7 (Hi-Res)',value:'7'},{name:'6 (CD)',value:'6'}] },
-        { key: 'amazon',     name: 'Amazon',         icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
-        { key: 'tidal',      name: 'Tidal',          icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
-        { key: 'pandora',    name: 'Pandora',        icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] },
-        { key: 'soundcloud', name: 'SoundCloud',     icon: '🔊', qualities: [{name:'MP3 128kbps',value:'mp3'},{name:'Opus 64kbps',value:'opus'}] },
-        { key: 'bandcamp',   name: 'Bandcamp',       icon: '🎸', qualities: [{name:'Lossless (FLAC)',value:'lossless'},{name:'MP3 320kbps',value:'mp3_320'},{name:'MP3 V0',value:'mp3_v0'}] },
-        { key: 'applemusic', name: 'Apple Music',    icon: '🍎', qualities: [{name:'AAC 256kbps',value:'aac_256'},{name:'AAC 128kbps',value:'aac_128'}] },
-        { key: 'joox',       name: 'JOOX',           icon: '🎶', qualities: [{name:'HQ (320kbps)',value:'hq'},{name:'Standard',value:'standard'}] },
-        { key: 'yandexmusic',name: 'Yandex Music',   icon: '🎵', qualities: [{name:'Lossless',value:'lossless'},{name:'High (320kbps)',value:'high'},{name:'Standard',value:'standard'}] }
+        { key: 'deezer',   name: 'Deezer',   icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
+        { key: 'qobuz',   name: 'Qobuz',    icon: '💿', qualities: [{name:'27 (Hi-Res Max)',value:'27'},{name:'7 (Hi-Res)',value:'7'},{name:'6 (CD)',value:'6'}] },
+        { key: 'amazon',  name: 'Amazon',   icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
+        { key: 'tidal',   name: 'Tidal',    icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
+        { key: 'pandora', name: 'Pandora',  icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] }
       ].filter(item => providers[item.key]);
       return json(res, { providers: list });
     }
@@ -622,8 +612,7 @@ const server = http.createServer(async (req, res) => {
             // Pandora does not support artist search via API
             return json(res, { artists: [] });
           default:
-            // Provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
-            // semua memiliki method searchArtist() di kelasnya masing-masing
+            // Provider lain yang memiliki method searchArtist()
             if (providers[prov] && typeof providers[prov].searchArtist === 'function') {
               artists = await providers[prov].searchArtist(q, limit);
             } else {
@@ -662,7 +651,7 @@ const server = http.createServer(async (req, res) => {
           case 'pandora':
             return json(res, { error: 'Artist profile not supported for Pandora' }, 400);
           default:
-            // Provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
+            // Provider lain yang memiliki method getArtist()
             if (providers[prov] && typeof providers[prov].getArtist === 'function') {
               result = await providers[prov].getArtist(id);
             } else {
@@ -701,7 +690,7 @@ const server = http.createServer(async (req, res) => {
           case 'pandora':
             return json(res, { error: 'Album browsing not supported for Pandora' }, 400);
           default:
-            // Provider baru (soundcloud, bandcamp, applemusic, joox, yandexmusic)
+            // Provider lain yang memiliki method getAlbum()
             if (providers[prov] && typeof providers[prov].getAlbum === 'function') {
               result = await providers[prov].getAlbum(id);
             } else {
