@@ -271,8 +271,8 @@
     // Tampilkan player dengan status loading
     setPlayerLoading(track, 'Memuat stream...');
 
-    // Providers yang belum support getStreamUrlOnly di server — fallback ke downloadAndPlay
-    const STREAM_SUPPORTED = ['deezer', 'qobuz', 'amazon'];
+    // All 7 providers support getStreamUrlOnly — direct streaming enabled
+    const STREAM_SUPPORTED = ['deezer', 'qobuz', 'amazon', 'tidal', 'pandora', 'soda', 'netease'];
     if (!STREAM_SUPPORTED.includes(currentProvider)) {
       setPlayerLoading(track, 'Mempersiapkan stream...');
       return downloadAndPlay(track);
