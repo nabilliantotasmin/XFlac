@@ -1300,6 +1300,21 @@ function extractShareTrackData(html) {
 // RETRY HELPER
 // ═══════════════════════════════════════════════════════════════════════
 
+/**
+ * Returns true if the URL is a Soda/Douyin preview or sample clip.
+ * Soda preview URLs typically contain "preview" or come from a
+ * restricted CDN path that only serves truncated content.
+ */
+function isSodaPreviewUrl(url) {
+  if (!url) return false;
+  const u = String(url).toLowerCase();
+  if (u.includes('/preview/')) return true;
+  if (u.includes('preview=true')) return true;
+  if (u.includes('/sample/')) return true;
+  if (u.includes('is_preview=1')) return true;
+  return false;
+}
+
 async function withRetry(fn, attempts = CONFIG.retryAttempts, delay = CONFIG.retryDelay) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
@@ -1511,11 +1526,17 @@ class SodaProvider {
    * Download track using multiple APIs with fallback
    */
   /**
+   * ─ STREAMING PATH ────────────────────────────────────────────────────────
    * Returns the raw stream URL without downloading to disk.
    * Used by /api/stream-url for direct in-browser playback.
+   *
+   * Difference vs download():
+   *  • Skips DRM/protected streams (PlayAuth) — browser can't decrypt these
+   *  • Returns URL immediately, no disk I/O
+   *  • Rejects known preview/sample URLs
+   * ─────────────────────────────────────────────────────────────────────────
    */
   async getStreamUrlOnly(trackId, quality = 'best') {
-    const fakeTrack = { id: trackId };
     const errors = [];
 
     for (const api of this.downloadAPIs) {
@@ -1527,15 +1548,21 @@ class SodaProvider {
           return selected;
         }, 2, 1000);
 
-        // Skip protected/DRM streams
+        // Skip DRM-protected streams — browser cannot decrypt PlayAuth tokens
         const playAuth = audioInfo.PlayAuth || audioInfo.play_auth || '';
         if (playAuth) {
-          errors.push(`${api.name}: protected stream`);
+          errors.push(`${api.name}: protected stream (PlayAuth)`);
           continue;
         }
 
         const url = audioInfo.MainPlayUrl || audioInfo.BackupPlayUrl;
-        if (!url) throw new Error(`${api.name} returned empty URL`);
+        if (!url) { errors.push(`${api.name}: empty URL`); continue; }
+
+        // Reject known preview/sample URLs
+        if (isSodaPreviewUrl(url)) {
+          errors.push(`${api.name}: returned preview URL`);
+          continue;
+        }
 
         const fmt = (audioInfo.Format || audioInfo.format || '').toLowerCase();
         let format = 'mp3';
@@ -1543,7 +1570,7 @@ class SodaProvider {
         else if (fmt.includes('m4a') || fmt.includes('aac') || fmt.includes('mp4')) format = 'm4a';
         else if (fmt.includes('ogg')) format = 'ogg';
 
-        console.log(`[Soda] Stream URL resolved via ${api.name}: ${format}`);
+        console.log(`[Soda] Stream URL resolved via ${api.name}: ${format} — ${url.substring(0, 60)}...`);
         return { url, format, encrypted: false };
       } catch (err) {
         errors.push(`${api.name}: ${err.message}`);
@@ -1553,6 +1580,13 @@ class SodaProvider {
     throw new Error(`All Soda stream APIs failed: ${errors.join('; ')}`);
   }
 
+  /**
+   * ─ DOWNLOAD PATH ─────────────────────────────────────────────────────────
+   * Same API resolution as streaming but writes bytes to disk with progress.
+   * Unlike streaming, tries to continue with protected streams if a
+   * non-protected BackupPlayUrl exists.
+   * ─────────────────────────────────────────────────────────────────────────
+   */
   async download(track, quality, outputPath, onProgress) {
     if (!track || !track.id) throw new Error('Invalid Soda track');
     onProgress?.(5);
