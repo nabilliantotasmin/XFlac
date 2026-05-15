@@ -1,11 +1,24 @@
 /**
  * XenoFlac Server
- * Uses new Amazon provider with full artist/album/track API
+ * Unified search engine — Amazon, Deezer, Pandora, Qobuz, Tidal
  */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+// ─── Unified Search Engine ───
+let unifiedSearch, getProviderMeta, getProvider, getProviderRegistry;
+try {
+  const us = require('./lib/unifiedSearch');
+  unifiedSearch        = us.unifiedSearch;
+  getProviderMeta      = us.getProviderMeta;
+  getProvider          = us.getProvider;
+  getProviderRegistry  = us.getProviderRegistry;
+  console.log('[server] unifiedSearch engine loaded');
+} catch (e) {
+  console.warn('[server] unifiedSearch not available:', e.message);
+}
 
 const PORT = process.env.PORT || 3000;
 // Serve dari folder 'public' kalau ada, fallback ke root folder
@@ -518,14 +531,26 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/api/providers' && m === 'GET') {
-      const list = [
+      // Unified search always available
+      const unifiedEntry = {
+        key: 'unified',
+        name: 'All Providers',
+        icon: '🔍',
+        isUnified: true,
+        qualities: [],   // per-track qualities resolved dynamically
+        subProviders: getProviderRegistry ? getProviderRegistry() : []
+      };
+
+      // Individual providers (legacy single-provider mode still supported)
+      const legacyList = [
         { key: 'deezer',   name: 'Deezer',   icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
-        { key: 'qobuz',   name: 'Qobuz',    icon: '💿', qualities: [{name:'27 (Hi-Res Max)',value:'27'},{name:'7 (Hi-Res)',value:'7'},{name:'6 (CD)',value:'6'}] },
-        { key: 'amazon',  name: 'Amazon',   icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
-        { key: 'tidal',   name: 'Tidal',    icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
-        { key: 'pandora', name: 'Pandora',  icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] }
+        { key: 'qobuz',    name: 'Qobuz',    icon: '💿', qualities: [{name:'Hi-Res Max (27)',value:'27'},{name:'Hi-Res (7)',value:'7'},{name:'CD Quality (6)',value:'6'}] },
+        { key: 'amazon',   name: 'Amazon',   icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
+        { key: 'tidal',    name: 'Tidal',    icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
+        { key: 'pandora',  name: 'Pandora',  icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] }
       ].filter(item => providers[item.key]);
-      return json(res, { providers: list });
+
+      return json(res, { providers: [unifiedEntry, ...legacyList] });
     }
 
     if (p === '/api/library' && m === 'GET') {
@@ -842,6 +867,99 @@ const server = http.createServer(async (req, res) => {
 
 
 
+    // ─── UNIFIED SEARCH ──────────────────────────────────────────────────────────
+    // GET /api/unified-search?q=<query>&limit=<n>&providers=<csv>
+    //
+    // Mencari dari semua provider secara paralel, deduplicate, lalu
+    // mengembalikan array unified tracks. Setiap track memiliki field `providers[]`
+    // yang mencantumkan di provider mana track tersebut tersedia beserta kualitasnya.
+    //
+    // Response: { tracks: UnifiedTrack[], providerErrors: {}, meta: {} }
+    if (p === '/api/unified-search' && m === 'GET') {
+      const q     = parsed.searchParams.get('q');
+      const limit = Math.min(parseInt(parsed.searchParams.get('limit') || '10', 10), 20);
+      const provCsv = parsed.searchParams.get('providers') || '';
+      const provKeys = provCsv ? provCsv.split(',').map(s => s.trim()).filter(Boolean) : null;
+
+      if (!q) return json(res, { error: 'Missing query' }, 400);
+      if (!unifiedSearch) return json(res, { error: 'Unified search engine not available' }, 500);
+
+      try {
+        const { tracks, providerErrors } = await unifiedSearch(q, limit, provKeys, 12000);
+        return json(res, {
+          tracks,
+          providerErrors,
+          meta: {
+            query:    q,
+            total:    tracks.length,
+            providers: Object.keys(providerErrors).length
+              ? `${(provKeys || ['qobuz','deezer','tidal','amazon','pandora']).length - Object.keys(providerErrors).length} of ${(provKeys || ['qobuz','deezer','tidal','amazon','pandora']).length} providers responded`
+              : 'all providers responded'
+          }
+        });
+      } catch (err) {
+        console.error('[unified-search] error:', err.message);
+        return json(res, { error: err.message }, 500);
+      }
+    }
+
+    // ─── UNIFIED STREAM URL ───────────────────────────────────────────────────
+    // GET /api/unified-stream-url?id=<trackId>&provider=qobuz&quality=6
+    //
+    // Mencoba stream langsung. Hanya Qobuz yang diprioritaskan untuk streaming.
+    // Jika provider bukan Qobuz (atau tidak support stream), kembalikan error
+    // sehingga UI dapat menampilkan opsi download dari provider lain.
+    //
+    // Ini adalah alias tipis ke /api/stream-url dengan logika prioritas Qobuz.
+    if (p === '/api/unified-stream-url' && m === 'GET') {
+      const provKey  = parsed.searchParams.get('provider');
+      const trackId  = parsed.searchParams.get('id');
+      const quality  = parsed.searchParams.get('quality') || '6';
+
+      if (!trackId) return json(res, { error: 'Missing id' }, 400);
+      if (!provKey)  return json(res, { error: 'Missing provider' }, 400);
+
+      // Hanya Qobuz yang boleh di-stream langsung sesuai requirement
+      if (provKey !== 'qobuz') {
+        return json(res, {
+          error:     `Direct streaming hanya tersedia untuk Qobuz. Provider "${provKey}" harus didownload terlebih dahulu.`,
+          canStream: false,
+          provider:  provKey
+        }, 400);
+      }
+
+      const provObj = providers[provKey] || (getProvider ? getProvider(provKey) : null);
+      if (!provObj) return json(res, { error: 'Provider not available' }, 400);
+      if (typeof provObj.getStreamUrlOnly !== 'function')
+        return json(res, { error: 'Provider does not support direct streaming' }, 400);
+
+      try {
+        const result = await provObj.getStreamUrlOnly(trackId, quality);
+        const remoteUrl = typeof result === 'string' ? result : result.url || result.streamUrl;
+        const encrypted = typeof result === 'string' ? false  : !!(result.encrypted || result.decryptionKey);
+        const format    = typeof result === 'string' ? 'flac' : (result.format || result.codec || 'flac');
+        const decKey    = typeof result === 'string' ? '' : (result.decryptionKey || '') || (result.encrypted ? trackId : '');
+
+        if (!remoteUrl) return json(res, { error: 'Resolver returned no URL' }, 502);
+
+        const meta = Buffer.from(JSON.stringify({
+          url: remoteUrl, enc: encrypted, key: decKey, fmt: format, prov: provKey
+        })).toString('base64url');
+
+        return json(res, {
+          proxyUrl:  `/api/proxy-stream?t=${meta}`,
+          streamUrl: remoteUrl,
+          encrypted,
+          format,
+          provider:  provKey,
+          canStream: true
+        });
+      } catch (err) {
+        console.error(`[unified-stream-url] ${provKey}/${trackId} error:`, err.message);
+        return json(res, { error: err.message, canStream: false }, 502);
+      }
+    }
+
     // ─── STREAM URL RESOLVER ────────────────────────────────────────────────────
     // GET /api/stream-url?provider=qobuz&id=123456789&quality=6
     // Returns { streamUrl, proxyUrl, encrypted, format } — no file written to disk
@@ -1066,13 +1184,13 @@ server.listen(PORT, () => {
   console.log(`📁 Downloads folder: ${DL_DIR}`);
   console.log(`▶️  Streaming endpoint: /stream/<fileName>`);
   console.log(`🏷️  Metadata tagging: ${tagFile ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`👤 Artist search: ENABLED for Deezer, Qobuz, Tidal, Amazon, SoundCloud, Bandcamp, Apple Music, JOOX, Yandex Music`);
-  console.log(`📻 Pandora provider: ${providers.pandora     ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🔊 SoundCloud:      ${providers.soundcloud  ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🎸 Bandcamp:        ${providers.bandcamp    ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🍎 Apple Music:     ${providers.applemusic  ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🎶 JOOX:            ${providers.joox        ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🎵 Yandex Music:    ${providers.yandexmusic ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🔍 Unified search: ${unifiedSearch ? 'ENABLED (Amazon + Deezer + Pandora + Qobuz + Tidal)' : 'DISABLED'}`);
+  console.log(`💿 Qobuz stream: PRIORITY — direct streaming enabled`);
+  console.log(`📥 Download providers: Deezer, Tidal, Amazon, Pandora (download-then-play)`);
+  const loaded  = Object.entries(providers).filter(([,v]) => v).map(([k]) => k);
+  const missing = Object.entries(providers).filter(([,v]) => !v).map(([k]) => k);
+  if (loaded.length)  console.log(`✅ Providers loaded: ${loaded.join(', ')}`);
+  if (missing.length) console.log(`⚠️  Providers missing: ${missing.join(', ')}`);
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`
