@@ -386,24 +386,45 @@
     }
   }
 
+  /** Strip semua timestamp LRC dari sebuah string, e.g. [01:23.45] → "" */
+  function stripTimestamps(str) {
+    return str
+      .replace(/\[\d{2}:\d{2}[.:]\d{2,3}\]/g, '')  // [mm:ss.cs] atau [mm:ss:cs]
+      .replace(/\[\d{2}:\d{2}\]/g, '')              // [mm:ss] tanpa cs
+      .trim();
+  }
+
   function parseLyrics(raw, synced) {
+    const lrcRe  = /^\[(\d{2}):(\d{2})[.:](\d{2,3})\](.*)$/;
+    const metaRe = /^\[(ti|ar|al|by|offset|length):/i;
+
     if (!synced) {
+      // Meski server bilang "tidak synced", mungkin masih ada sisa timestamp.
+      // Strip semua timestamp dari setiap baris lalu tampilkan teks bersih.
       const lines = raw.split('\n')
-        .map(l => l.trim())
-        .filter(l => l && !/^\[(ti|ar|by|al|offset|length):/i.test(l))
+        .map(l => {
+          const stripped = stripTimestamps(l.trim());
+          return stripped;
+        })
+        .filter(text => text && !metaRe.test(text))
         .map(text => ({ time: -1, text }));
       return { lines, synced: false };
     }
+
+    // Synced: parse timestamp → simpan sebagai number, text = teks bersih tanpa timestamp
     const lines = [];
-    const lrcRe = /^\[(\d{2}):(\d{2})[.:](\d{2,3})\](.*)$/;
-    const metaRe = /^\[(ti|ar|al|by|offset|length):/i;
     for (const raw_line of raw.split('\n')) {
       const s = raw_line.trim();
       if (!s || metaRe.test(s)) continue;
       const m = s.match(lrcRe);
       if (m) {
-        const time = parseInt(m[1]) * 60 + parseInt(m[2]) + (m[3].length === 3 ? parseInt(m[3]) : parseInt(m[3]) * 10) / 1000;
-        lines.push({ time, text: m[4].trim() });
+        const time = parseInt(m[1]) * 60 + parseInt(m[2])
+          + (m[3].length === 3 ? parseInt(m[3]) : parseInt(m[3]) * 10) / 1000;
+        // Teks sudah bersih (setelah timestamp di-strip via capture group m[4])
+        const text = stripTimestamps(m[4]).trim();
+        lines.push({ time, text });
+      } else {
+        // Baris yang tidak punya timestamp tapi ikut masuk — skip (bukan lirik valid)
       }
     }
     lines.sort((a, b) => a.time - b.time);
