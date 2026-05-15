@@ -30,7 +30,7 @@ const providers = {
   amazon: safeRequire(path.join(PROVIDERS_DIR, 'amazon')),
   tidal: safeRequire(path.join(PROVIDERS_DIR, 'tidal')),
   pandora: safeRequire(path.join(PROVIDERS_DIR, 'pandora')),
-  kuwo: safeRequire(path.join(PROVIDERS_DIR, 'kuwo'))
+  jiosaavn: safeRequire(path.join(PROVIDERS_DIR, 'jiosaavn'))
 };
 
 let tagFile = null;
@@ -308,16 +308,17 @@ function stdTrack(t, source) {
       isrc: t.isrc || ''
     };
   }
-  if (source === 'kuwo') {
+  if (source === 'jiosaavn') {
     return {
-      id:       String(t.id),
-      title:    t.title   || 'Unknown',
-      artist:   t.artist  || 'Unknown',
-      album:    t.album   || '',
-      albumId:  t.albumId || '',
-      cover:    t.cover   || '',
-      duration: t.duration || 0,
-      isrc:     t.isrc    || '',
+      id:        String(t.id),
+      title:     t.title    || 'Unknown',
+      artist:    t.artist   || 'Unknown',
+      album:     t.album    || '',
+      albumId:   t.albumId  || '',
+      cover:     t.cover    || '',
+      duration:  t.duration || 0,
+      isrc:      t.isrc     || '',
+      language:  t.language || '',
       _audioUrl: t._audioUrl || ''
     };
   }
@@ -526,7 +527,7 @@ const server = http.createServer(async (req, res) => {
         { key: 'amazon', name: 'Amazon',        icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
         { key: 'tidal',  name: 'Tidal',         icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
         { key: 'pandora',name: 'Pandora',       icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] },
-        { key: 'kuwo',   name: 'Kuwo Music',    icon: '🎵', qualities: [{name:'FLAC Lossless',value:'flac'},{name:'MP3 320kbps',value:'320'},{name:'MP3 128kbps',value:'128'}] }
+        { key: 'jiosaavn', name: 'JioSaavn',     icon: '🎵', qualities: [{name:'320kbps',value:'320'},{name:'160kbps',value:'160'},{name:'96kbps',value:'96'},{name:'48kbps',value:'48'}] }
       ].filter(item => providers[item.key]);
       return json(res, { providers: list });
     }
@@ -614,8 +615,8 @@ const server = http.createServer(async (req, res) => {
           case 'pandora':
             // Pandora does not support artist search via API
             return json(res, { artists: [] });
-          case 'kuwo':
-            artists = await providers.kuwo.searchArtist(q, limit);
+          case 'jiosaavn':
+            artists = await providers.jiosaavn.searchArtist(q, limit);
             break;
         }
       } catch (err) {
@@ -648,8 +649,8 @@ const server = http.createServer(async (req, res) => {
             break;
           case 'pandora':
             return json(res, { error: 'Artist profile not supported for Pandora' }, 400);
-          case 'kuwo':
-            result = await providers.kuwo.getArtist(id);
+          case 'jiosaavn':
+            result = await providers.jiosaavn.getArtist(id);
             break;
           default:
             return json(res, { error: 'Artist profile not supported for this provider' }, 400);
@@ -684,8 +685,8 @@ const server = http.createServer(async (req, res) => {
             break;
           case 'pandora':
             return json(res, { error: 'Album browsing not supported for Pandora' }, 400);
-          case 'kuwo':
-            result = await providers.kuwo.getAlbum(id);
+          case 'jiosaavn':
+            result = await providers.jiosaavn.getAlbum(id);
             break;
           default:
             return json(res, { error: 'Album not supported for this provider' }, 400);
@@ -1060,7 +1061,7 @@ server.listen(PORT, () => {
   console.log(`🏷️  Metadata tagging: ${tagFile ? 'ENABLED' : 'DISABLED'}`);
   console.log(`👤 Artist search: ENABLED for Deezer, Qobuz, Tidal, Amazon, Kuwo Music`);
   console.log(`📻 Pandora provider: ${providers.pandora ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🎵 Kuwo Music provider: ${providers.kuwo ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🎵 JioSaavn provider: ${providers.jiosaavn ? 'LOADED' : 'NOT FOUND'}`);
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`
