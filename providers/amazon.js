@@ -1364,11 +1364,30 @@ class AmazonProvider {
    * ─────────────────────────────────────────────────────────────────────────
    */
   async getStreamUrlOnly(asin, quality = 'flac') {
+    const rawAsin = String(asin).replace(/^amazon_/i, '').trim();
     const codec = qualityToCodec(quality);
-    const result = await callAmazonStreamApis(asin, codec);
+    const result = await callAmazonStreamApis(rawAsin, codec);
     if (result && result.error) throw new Error(`Amazon stream resolve failed: ${result.error}`);
     if (!result || !result.streamUrl) throw new Error('Could not resolve Amazon stream URL');
-    return result;
+
+    // Normalise to the shape server.js expects:
+    //   { url, format, encrypted, decryptionKey }
+    const resolvedCodec = (result.codec || codec || 'flac').toLowerCase();
+    let format = 'flac';
+    if (resolvedCodec === 'opus') format = 'opus';
+    else if (resolvedCodec === 'eac3' || resolvedCodec === 'mha1') format = 'm4a';
+    else if (resolvedCodec === 'aac' || resolvedCodec === 'mp4' || resolvedCodec === 'm4a') format = 'm4a';
+    else if (resolvedCodec === 'mp3') format = 'mp3';
+
+    return {
+      url:           result.streamUrl,
+      streamUrl:     result.streamUrl,   // keep for backward compat
+      format,
+      codec:         resolvedCodec,
+      encrypted:     !!(result.decryptionKey),
+      decryptionKey: result.decryptionKey || '',
+      coverUrl:      result.coverUrl || ''
+    };
   }
 
   // ── Search Tracks ──
