@@ -220,21 +220,147 @@
     </div>
 
     <!-- ═══════════════════════════════════════════════
-         BOTTOM PLAYER
+         FULL-SCREEN PLAYER MODAL
     ═══════════════════════════════════════════════ -->
-    <div id="music-player" class="music-player glass-panel hidden">
-        <img id="player-cover" class="player-cover hidden" src="" alt="">
-        <div class="player-meta">
-            <div id="player-title" class="player-title">Nothing playing</div>
-            <div id="player-artist" class="player-artist">—</div>
-        </div>
-        <audio id="player-audio" controls preload="metadata"></audio>
-        <a id="player-download" class="player-btn" href="#" download title="Save file">
-            <i class="fas fa-download"></i>
-        </a>
-        <button id="player-close" class="player-btn" type="button" title="Close player">
-            <i class="fas fa-times"></i>
+    <div id="player-modal" class="player-modal hidden" role="dialog" aria-modal="true">
+
+        <!-- Blurred background art -->
+        <div id="player-bg-blur" class="player-bg-blur"></div>
+        <div class="player-bg-overlay"></div>
+
+        <!-- Close / minimise -->
+        <button id="player-close" class="player-modal-close" title="Close player">
+            <i class="fas fa-chevron-down"></i>
         </button>
+
+        <!-- ── Main layout: art + info (left) | lyrics (right) ── -->
+        <div class="player-layout">
+
+            <!-- LEFT PANEL -->
+            <div class="player-left">
+
+                <!-- Album artwork -->
+                <div class="player-artwork-wrap">
+                    <img id="player-cover" class="player-artwork" src="" alt="">
+                    <div id="player-artwork-placeholder" class="player-artwork-placeholder">
+                        <i class="fas fa-music"></i>
+                    </div>
+                    <!-- Vinyl ring animation while playing -->
+                    <div id="player-vinyl-ring" class="player-vinyl-ring"></div>
+                </div>
+
+                <!-- Track metadata -->
+                <div class="player-meta">
+                    <div class="player-meta-top">
+                        <div class="player-meta-text">
+                            <div id="player-title" class="player-title-text">Nothing playing</div>
+                            <div id="player-artist" class="player-artist-text">—</div>
+                            <div id="player-album" class="player-album-text"></div>
+                        </div>
+                        <a id="player-download" class="player-action-btn" href="#" download title="Save file">
+                            <i class="fas fa-download"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Progress bar -->
+                <div class="player-progress-area">
+                    <div class="player-progress-bar" id="player-progress-bar">
+                        <div class="player-progress-bg">
+                            <div id="player-progress-fill" class="player-progress-fill"></div>
+                            <div id="player-progress-thumb" class="player-progress-thumb"></div>
+                        </div>
+                    </div>
+                    <div class="player-time-row">
+                        <span id="player-current-time" class="player-time">0:00</span>
+                        <span id="player-duration" class="player-time">0:00</span>
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="player-controls">
+                    <button id="player-shuffle" class="player-ctrl-btn player-ctrl-sm" title="Shuffle">
+                        <i class="fas fa-shuffle"></i>
+                    </button>
+                    <button id="player-prev" class="player-ctrl-btn player-ctrl-md" title="Previous">
+                        <i class="fas fa-backward-step"></i>
+                    </button>
+                    <button id="player-play-pause" class="player-ctrl-btn player-ctrl-lg" title="Play / Pause">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    <button id="player-next" class="player-ctrl-btn player-ctrl-md" title="Next">
+                        <i class="fas fa-forward-step"></i>
+                    </button>
+                    <button id="player-repeat" class="player-ctrl-btn player-ctrl-sm" title="Repeat">
+                        <i class="fas fa-repeat"></i>
+                    </button>
+                </div>
+
+                <!-- Volume row -->
+                <div class="player-volume-row">
+                    <button id="player-mute-btn" class="player-vol-icon" title="Mute">
+                        <i class="fas fa-volume-high"></i>
+                    </button>
+                    <input id="player-volume" class="player-volume-slider" type="range"
+                           min="0" max="1" step="0.01" value="1">
+                    <button id="player-lyrics-toggle" class="player-lyrics-toggle-btn" title="Lyrics">
+                        <i class="fas fa-align-left"></i> Lyrics
+                    </button>
+                </div>
+
+            </div><!-- /player-left -->
+
+            <!-- RIGHT PANEL: lyrics -->
+            <div id="player-right" class="player-right hidden">
+                <div class="player-lyrics-header">
+                    <span class="player-lyrics-title"><i class="fas fa-align-left"></i> Lyrics</span>
+                    <span id="player-lyrics-provider" class="player-lyrics-provider-badge"></span>
+                </div>
+                <div id="player-lyrics-body" class="player-lyrics-body">
+                    <div class="player-lyrics-loading hidden" id="player-lyrics-loading">
+                        <div class="spinner-inline"><div></div><div></div><div></div></div>
+                        <p>Fetching lyrics…</p>
+                    </div>
+                    <div id="player-lyrics-lines" class="player-lyrics-lines"></div>
+                    <div id="player-lyrics-unavailable" class="player-lyrics-unavailable hidden">
+                        <i class="fas fa-microphone-slash"></i>
+                        <p>Lyrics not available</p>
+                    </div>
+                </div>
+            </div><!-- /player-right -->
+
+        </div><!-- /player-layout -->
+
+        <!-- Hidden audio element -->
+        <audio id="player-audio" preload="metadata" style="display:none"></audio>
+
+    </div><!-- /player-modal -->
+
+    <!-- ═══════════════════════════════════════════════
+         MINI PLAYER (bottom bar) — shown when modal is closed
+    ═══════════════════════════════════════════════ -->
+    <div id="mini-player" class="mini-player glass-panel hidden">
+        <img id="mini-cover" class="mini-cover" src="" alt="">
+        <div class="mini-meta">
+            <div id="mini-title" class="mini-title">Nothing playing</div>
+            <div id="mini-artist" class="mini-artist">—</div>
+        </div>
+        <div class="mini-progress-wrap">
+            <div class="mini-progress-bg">
+                <div id="mini-progress-fill" class="mini-progress-fill"></div>
+            </div>
+        </div>
+        <div class="mini-controls">
+            <button id="mini-play-pause" class="mini-btn" title="Play/Pause">
+                <i class="fas fa-play"></i>
+            </button>
+            <button id="mini-expand" class="mini-btn" title="Open player">
+                <i class="fas fa-chevron-up"></i>
+            </button>
+            <button id="mini-close" class="mini-btn" title="Close">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
     </div>
 
     <script src="app.js"></script>

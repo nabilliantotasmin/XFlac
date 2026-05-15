@@ -1,25 +1,13 @@
 /**
  * XenoFlac — Unified Search Frontend
- *
- * Search modes:
- *   - Tracks  : unified search across all 5 providers, deduplicated results
- *   - Artists : search artists/publishers via Deezer (best artist API),
- *               click artist → profile with discography,
- *               click album  → track list with ⚡ stream + ↓ download per track
- *
- * Stream/Download flow (tracks):
- *   ⚡ 1. Check local library first → play immediately
- *      2. Try Qobuz direct stream  → play in bottom player
- *      3. Fail → open download modal (provider + quality picker)
- *   ↓  Open download modal directly (provider + quality picker)
+ * Player: fullscreen modal + mini bottom bar + synced lyrics
  */
 (function () {
   'use strict';
 
   // ─── STATE ────────────────────────────────────────────────────────────────
   let providersData    = [];
-  let searchMode       = 'tracks';   // 'tracks' | 'artists'
-  let currentArtistProv = 'deezer';  // provider used for current artist profile
+  let searchMode       = 'tracks';
   let downloadPoll     = null;
   let currentTrack     = null;
   let selectedProvider = null;
@@ -29,30 +17,21 @@
   // ─── DOM REFS ─────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
   const el = {
-    // Search
     searchForm:    $('search-form'),
     searchInput:   $('search-input'),
     searchBtn:     $('search-btn'),
     providerBadges:$('provider-badges'),
     modeToggle:    $('search-mode-toggle'),
-
-    // Library
     refreshLibBtn: $('refresh-library-btn'),
     libraryList:   $('library-list'),
-
-    // Track results
     resultsSection:$('results-section'),
     loadingSpinner:$('loading-spinner'),
     resultsHeader: $('results-header'),
     resultsMeta:   $('results-meta'),
     resultsGrid:   $('results-grid'),
-
-    // Artist results
     artistSection: $('artist-results-section'),
     artistMeta:    $('artist-results-meta'),
     artistGrid:    $('artist-cards-grid'),
-
-    // Artist profile
     profileSection:      $('artist-profile-section'),
     profileBackBtn:      $('profile-back-btn'),
     profilePicture:      $('profile-picture'),
@@ -62,8 +41,6 @@
     profileProvLabel:    $('profile-provider-label'),
     profileAlbumsSpinner:$('profile-albums-spinner'),
     profileAlbumsGrid:   $('profile-albums-grid'),
-
-    // Album tracks
     albumTracksSection:  $('album-tracks-section'),
     albumBackBtn:        $('album-back-btn'),
     albumDetailCover:    $('album-detail-cover'),
@@ -72,8 +49,6 @@
     albumDetailMeta:     $('album-detail-meta'),
     albumTracksSpinner:  $('album-tracks-spinner'),
     albumTracksList:     $('album-tracks-list'),
-
-    // Download modal
     dlModal:             $('dl-modal'),
     dlClose:             $('dl-close'),
     dlCover:             $('dl-cover'),
@@ -94,20 +69,403 @@
     doneStep:            $('done-step'),
     playNowBtn:          $('play-now-btn'),
     saveFileLink:        $('save-file-link'),
-
-    // Player
-    musicPlayer:   $('music-player'),
-    playerCover:   $('player-cover'),
-    playerTitle:   $('player-title'),
-    playerArtist:  $('player-artist'),
-    playerAudio:   $('player-audio'),
-    playerDownload:$('player-download'),
-    playerClose:   $('player-close'),
   };
+
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PLAYER ENGINE
+  // ═══════════════════════════════════════════════════════════════════════════
+  const playerState = {
+    track: null, queue: [], queueIdx: -1,
+    playing: false, shuffle: false, repeat: false,
+    lyricsOpen: false, lyricsData: null, lyricsActiveIdx: -1, dragging: false,
+  };
+
+  const P = {
+    modal:          $('player-modal'),
+    bgBlur:         $('player-bg-blur'),
+    closeBtn:       $('player-close'),
+    artworkWrap:    null,
+    artwork:        $('player-cover'),
+    artworkPH:      $('player-artwork-placeholder'),
+    titleEl:        $('player-title'),
+    artistEl:       $('player-artist'),
+    albumEl:        $('player-album'),
+    downloadBtn:    $('player-download'),
+    progressBar:    $('player-progress-bar'),
+    progressFill:   $('player-progress-fill'),
+    progressThumb:  $('player-progress-thumb'),
+    currentTime:    $('player-current-time'),
+    durationEl:     $('player-duration'),
+    shuffleBtn:     $('player-shuffle'),
+    prevBtn:        $('player-prev'),
+    playPauseBtn:   $('player-play-pause'),
+    nextBtn:        $('player-next'),
+    repeatBtn:      $('player-repeat'),
+    muteBtn:        $('player-mute-btn'),
+    volumeSlider:   $('player-volume'),
+    lyricsToggle:   $('player-lyrics-toggle'),
+    lyricsPanel:    $('player-right'),
+    lyricsProvider: $('player-lyrics-provider'),
+    lyricsLoading:  $('player-lyrics-loading'),
+    lyricsLines:    $('player-lyrics-lines'),
+    lyricsNoAvail:  $('player-lyrics-unavailable'),
+    lyricsBody:     $('player-lyrics-body'),
+    audio:          $('player-audio'),
+    mini:           $('mini-player'),
+    miniCover:      $('mini-cover'),
+    miniTitle:      $('mini-title'),
+    miniArtist:     $('mini-artist'),
+    miniProgressFill: $('mini-progress-fill'),
+    miniPlayPause:  $('mini-play-pause'),
+    miniExpand:     $('mini-expand'),
+    miniClose:      $('mini-close'),
+  };
+
+  function initPlayer() {
+    P.artworkWrap = P.artwork?.parentElement;
+    P.closeBtn.addEventListener('click', minimisePlayer);
+    P.mini.addEventListener('click', e => { if (!e.target.closest('.mini-btn')) openPlayerModal(); });
+    P.miniPlayPause.addEventListener('click', e => { e.stopPropagation(); togglePlayPause(); });
+    P.miniExpand.addEventListener('click',    e => { e.stopPropagation(); openPlayerModal(); });
+    P.miniClose.addEventListener('click',     e => { e.stopPropagation(); closePlayer(); });
+    P.playPauseBtn.addEventListener('click', togglePlayPause);
+    P.prevBtn.addEventListener('click', playPrev);
+    P.nextBtn.addEventListener('click', playNext);
+    P.shuffleBtn.addEventListener('click', () => {
+      playerState.shuffle = !playerState.shuffle;
+      P.shuffleBtn.classList.toggle('active', playerState.shuffle);
+    });
+    P.repeatBtn.addEventListener('click', () => {
+      playerState.repeat = !playerState.repeat;
+      P.repeatBtn.classList.toggle('active', playerState.repeat);
+    });
+    P.volumeSlider.addEventListener('input', () => {
+      P.audio.volume = parseFloat(P.volumeSlider.value);
+      updateMuteIcon();
+    });
+    P.muteBtn.addEventListener('click', () => { P.audio.muted = !P.audio.muted; updateMuteIcon(); });
+    P.progressBar.addEventListener('mousedown',  progressDragStart);
+    P.progressBar.addEventListener('touchstart', progressDragStart, { passive: true });
+    document.addEventListener('mousemove',  progressDragMove);
+    document.addEventListener('touchmove',  progressDragMove, { passive: true });
+    document.addEventListener('mouseup',    progressDragEnd);
+    document.addEventListener('touchend',   progressDragEnd);
+    P.audio.addEventListener('timeupdate',     onTimeUpdate);
+    P.audio.addEventListener('loadedmetadata', onMetadataLoaded);
+    P.audio.addEventListener('play',  () => setPlayingVisuals(true));
+    P.audio.addEventListener('pause', () => setPlayingVisuals(false));
+    P.audio.addEventListener('ended', onEnded);
+    P.audio.addEventListener('error', () => setPlayingVisuals(false));
+    P.lyricsToggle.addEventListener('click', toggleLyricsPanel);
+    document.addEventListener('keydown', onPlayerKeydown);
+  }
+
+  function openPlayerModal() {
+    P.modal.classList.remove('hidden');
+    requestAnimationFrame(() => P.modal.classList.add('visible'));
+    hide(P.mini);
+  }
+  function minimisePlayer() {
+    P.modal.classList.remove('visible');
+    if (playerState.track) show(P.mini);
+    setTimeout(() => { if (!P.modal.classList.contains('visible')) P.modal.classList.add('hidden'); }, 460);
+  }
+  function closePlayer() {
+    P.audio.pause();
+    P.audio.removeAttribute('src');
+    P.audio.load();
+    P.modal.classList.remove('visible');
+    P.modal.classList.add('hidden');
+    hide(P.mini);
+    playerState.track = null;
+    playerState.playing = false;
+    setPlayingVisuals(false);
+  }
+
+  function setPlayerLoading(track, msg) {
+    playerState.track = track;
+    _applyTrackMeta(track);
+    P.artistEl.textContent = msg || '';
+    openPlayerModal();
+  }
+
+  function playInPlayer(item, autoOpen = true) {
+    if (!item?.streamUrl) return;
+    playerState.track = item;
+    _applyTrackMeta(item);
+    if (item.downloadUrl) {
+      P.downloadBtn.href = item.downloadUrl;
+      P.downloadBtn.setAttribute('download', item.fileName || 'track');
+    }
+    P.audio.src = item.streamUrl;
+    P.audio.load();
+    P.audio.play().catch(() => {});
+    show(P.mini);
+    if (autoOpen) openPlayerModal();
+    playerState.lyricsData = null;
+    playerState.lyricsActiveIdx = -1;
+    P.lyricsLines.innerHTML = '';
+    hide(P.lyricsNoAvail);
+    hide(P.lyricsLoading);
+    fetchAndRenderLyrics(item);
+  }
+
+  function _applyTrackMeta(item) {
+    if (!item) return;
+    const title  = item.title  || 'Unknown';
+    const artist = item.artist || '—';
+    const album  = item.album  || '';
+    const cover  = item.cover  || '';
+    P.titleEl.textContent  = title;
+    P.artistEl.textContent = artist;
+    P.albumEl.textContent  = album;
+    P.miniTitle.textContent  = title;
+    P.miniArtist.textContent = artist;
+    if (cover) {
+      P.artwork.src = cover;
+      P.artwork.style.display = 'block';
+      if (P.artworkPH) P.artworkPH.classList.add('hidden');
+      P.bgBlur.style.backgroundImage = `url(${cover})`;
+      P.miniCover.src = cover;
+      P.miniCover.style.display = 'block';
+    } else {
+      P.artwork.style.display = 'none';
+      if (P.artworkPH) P.artworkPH.classList.remove('hidden');
+      P.bgBlur.style.backgroundImage = 'none';
+      P.miniCover.style.display = 'none';
+    }
+    requestAnimationFrame(() => {
+      if (P.titleEl.scrollWidth > P.titleEl.clientWidth + 4) P.titleEl.classList.add('overflowing');
+      else P.titleEl.classList.remove('overflowing');
+    });
+    P.currentTime.textContent = '0:00';
+    P.durationEl.textContent  = item.duration ? fmtDurSec(item.duration / 1000) : '0:00';
+    P.progressFill.style.width = '0%';
+    P.progressThumb.style.left = '0%';
+    P.miniProgressFill.style.width = '0%';
+  }
+
+  function setPlayingVisuals(isPlaying) {
+    playerState.playing = isPlaying;
+    const ppI = P.playPauseBtn.querySelector('i');
+    if (ppI) ppI.className = isPlaying ? 'fas fa-pause' : 'fas fa-play';
+    const mI = P.miniPlayPause.querySelector('i');
+    if (mI) mI.className = isPlaying ? 'fas fa-pause' : 'fas fa-play';
+    P.miniPlayPause.classList.toggle('play-active', isPlaying);
+    if (P.artworkWrap) P.artworkWrap.classList.toggle('playing', isPlaying);
+  }
+
+  function togglePlayPause() {
+    if (!P.audio.src) return;
+    if (P.audio.paused) P.audio.play().catch(() => {});
+    else P.audio.pause();
+  }
+
+  function playPrev() {
+    if (P.audio.currentTime > 3) { P.audio.currentTime = 0; return; }
+    if (!playerState.queue.length) return;
+    const i = Math.max(0, playerState.queueIdx - 1);
+    if (i !== playerState.queueIdx) { playerState.queueIdx = i; playInPlayer(playerState.queue[i]); }
+  }
+  function playNext() {
+    if (!playerState.queue.length) return;
+    let i = playerState.shuffle
+      ? Math.floor(Math.random() * playerState.queue.length)
+      : playerState.queueIdx + 1;
+    if (i >= playerState.queue.length) { if (playerState.repeat) i = 0; else return; }
+    playerState.queueIdx = i;
+    playInPlayer(playerState.queue[i]);
+  }
+
+  function onEnded() {
+    if (playerState.repeat) { P.audio.currentTime = 0; P.audio.play().catch(() => {}); }
+    else playNext();
+  }
+  function onMetadataLoaded() {
+    const d = P.audio.duration;
+    if (d && isFinite(d)) P.durationEl.textContent = fmtDurSec(d);
+  }
+  function onTimeUpdate() {
+    if (playerState.dragging) return;
+    const cur = P.audio.currentTime, dur = P.audio.duration;
+    if (!dur || !isFinite(dur)) return;
+    const pct = (cur / dur) * 100;
+    P.progressFill.style.width     = pct + '%';
+    P.progressThumb.style.left     = pct + '%';
+    P.miniProgressFill.style.width = pct + '%';
+    P.currentTime.textContent = fmtDurSec(cur);
+    if (playerState.lyricsData?.synced) syncLyricsHighlight(cur);
+  }
+
+  function _progressPct(e) {
+    const rect = P.progressBar.querySelector('.player-progress-bg').getBoundingClientRect();
+    const x = e.touches ? e.touches[0].clientX : e.clientX;
+    return Math.max(0, Math.min(1, (x - rect.left) / rect.width));
+  }
+  function progressDragStart(e) {
+    if (!P.audio.src) return;
+    playerState.dragging = true;
+    P.progressBar.classList.add('dragging');
+    P.progressFill.classList.add('dragging');
+    P.progressThumb.classList.add('dragging');
+    const pct = _progressPct(e) * 100;
+    P.progressFill.style.width = pct + '%';
+    P.progressThumb.style.left = pct + '%';
+  }
+  function progressDragMove(e) {
+    if (!playerState.dragging) return;
+    const pct = _progressPct(e) * 100;
+    P.progressFill.style.width = pct + '%';
+    P.progressThumb.style.left = pct + '%';
+    P.miniProgressFill.style.width = pct + '%';
+  }
+  function progressDragEnd(e) {
+    if (!playerState.dragging) return;
+    playerState.dragging = false;
+    P.progressBar.classList.remove('dragging');
+    P.progressFill.classList.remove('dragging');
+    P.progressThumb.classList.remove('dragging');
+    const pct = _progressPct(e);
+    const dur = P.audio.duration;
+    if (dur && isFinite(dur)) P.audio.currentTime = pct * dur;
+  }
+
+  function updateMuteIcon() {
+    const i = P.muteBtn.querySelector('i');
+    if (!i) return;
+    if (P.audio.muted || P.audio.volume === 0) i.className = 'fas fa-volume-xmark';
+    else if (P.audio.volume < 0.5) i.className = 'fas fa-volume-low';
+    else i.className = 'fas fa-volume-high';
+  }
+
+  function onPlayerKeydown(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (P.modal.classList.contains('hidden') && P.mini.classList.contains('hidden')) return;
+    if (e.code === 'Space')      { e.preventDefault(); togglePlayPause(); }
+    if (e.code === 'ArrowRight') { P.audio.currentTime = Math.min(P.audio.duration || 0, P.audio.currentTime + 10); }
+    if (e.code === 'ArrowLeft')  { P.audio.currentTime = Math.max(0, P.audio.currentTime - 10); }
+    if (e.code === 'ArrowUp')    { P.audio.volume = Math.min(1, P.audio.volume + .05); P.volumeSlider.value = P.audio.volume; updateMuteIcon(); }
+    if (e.code === 'ArrowDown')  { P.audio.volume = Math.max(0, P.audio.volume - .05); P.volumeSlider.value = P.audio.volume; updateMuteIcon(); }
+    if (e.code === 'KeyL')       { toggleLyricsPanel(); }
+    if (e.code === 'Escape' && !P.modal.classList.contains('hidden')) minimisePlayer();
+  }
+
+  // ── Lyrics ────────────────────────────────────────────────────────────────
+  function toggleLyricsPanel() {
+    playerState.lyricsOpen = !playerState.lyricsOpen;
+    P.lyricsToggle.classList.toggle('active', playerState.lyricsOpen);
+    P.lyricsPanel.classList.toggle('hidden', !playerState.lyricsOpen);
+  }
+
+  async function fetchAndRenderLyrics(track) {
+    if (!track?.title || !track?.artist) return;
+    show(P.lyricsLoading);
+    hide(P.lyricsNoAvail);
+    P.lyricsLines.innerHTML = '';
+    P.lyricsProvider.textContent = '';
+    try {
+      const params = new URLSearchParams({
+        title: track.title, artist: track.artist,
+        album: track.album || '',
+        duration: track.duration ? Math.round(track.duration / 1000) : 0,
+        isrc: track.isrc || '',
+      });
+      const r    = await fetch(`/api/lyrics?${params}`);
+      const data = await r.json();
+      hide(P.lyricsLoading);
+      if (!data.lyrics?.trim()) { show(P.lyricsNoAvail); return; }
+      P.lyricsProvider.textContent = data.provider || '';
+      const parsed = parseLyrics(data.lyrics, data.synced);
+      playerState.lyricsData = parsed;
+      renderLyricsLines(parsed);
+      if (parsed.synced && P.audio.currentTime > 0) syncLyricsHighlight(P.audio.currentTime);
+    } catch {
+      hide(P.lyricsLoading);
+      show(P.lyricsNoAvail);
+    }
+  }
+
+  function parseLyrics(raw, synced) {
+    if (!synced) {
+      const lines = raw.split('\n')
+        .map(l => l.trim())
+        .filter(l => l && !/^\[(ti|ar|by|al|offset|length):/i.test(l))
+        .map(text => ({ time: -1, text }));
+      return { lines, synced: false };
+    }
+    const lines = [];
+    const lrcRe = /^\[(\d{2}):(\d{2})[.:](\d{2,3})\](.*)$/;
+    const metaRe = /^\[(ti|ar|al|by|offset|length):/i;
+    for (const raw_line of raw.split('\n')) {
+      const s = raw_line.trim();
+      if (!s || metaRe.test(s)) continue;
+      const m = s.match(lrcRe);
+      if (m) {
+        const time = parseInt(m[1]) * 60 + parseInt(m[2]) + (m[3].length === 3 ? parseInt(m[3]) : parseInt(m[3]) * 10) / 1000;
+        lines.push({ time, text: m[4].trim() });
+      }
+    }
+    lines.sort((a, b) => a.time - b.time);
+    return { lines, synced: true };
+  }
+
+  function renderLyricsLines(parsed) {
+    P.lyricsLines.innerHTML = '';
+    parsed.lines.forEach((line, idx) => {
+      const div = document.createElement('div');
+      if (!parsed.synced) {
+        if (/^\[.+\]$/.test(line.text) || /^(verse|chorus|bridge|outro|intro|pre-chorus|hook)/i.test(line.text)) {
+          div.className = 'lyric-line plain-section';
+          div.textContent = line.text.replace(/^\[|\]$/g, '');
+        } else {
+          div.className = 'lyric-line plain';
+          div.textContent = line.text || '';
+        }
+      } else {
+        div.className = 'lyric-line';
+        div.textContent = line.text || '♪';
+        div.addEventListener('click', () => { if (line.time >= 0) P.audio.currentTime = line.time; });
+      }
+      div.dataset.idx = idx;
+      P.lyricsLines.appendChild(div);
+    });
+  }
+
+  function syncLyricsHighlight(cur) {
+    const lines = playerState.lyricsData?.lines;
+    if (!lines?.length) return;
+    let activeIdx = 0;
+    for (let i = 0; i < lines.length; i++) { if (lines[i].time <= cur) activeIdx = i; else break; }
+    if (activeIdx === playerState.lyricsActiveIdx) return;
+    playerState.lyricsActiveIdx = activeIdx;
+    P.lyricsLines.querySelectorAll('.lyric-line').forEach((el, i) => {
+      el.classList.remove('active', 'prev-1', 'prev-2', 'next-1', 'next-2');
+      const d = i - activeIdx;
+      if (d === 0)  el.classList.add('active');
+      else if (d === -1) el.classList.add('prev-1');
+      else if (d === -2) el.classList.add('prev-2');
+      else if (d === 1)  el.classList.add('next-1');
+      else if (d === 2)  el.classList.add('next-2');
+    });
+    const activeEl = P.lyricsLines.querySelector(`[data-idx="${activeIdx}"]`);
+    if (activeEl) {
+      const bR = P.lyricsBody.getBoundingClientRect();
+      const eR = activeEl.getBoundingClientRect();
+      P.lyricsBody.scrollBy({ top: eR.top - bR.top - bR.height / 2 + eR.height / 2, behavior: 'smooth' });
+    }
+  }
+
+  function fmtDurSec(s) {
+    if (!s || !isFinite(s)) return '0:00';
+    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  }
+
 
   // ─── INIT ─────────────────────────────────────────────────────────────────
   async function init() {
     await Promise.all([loadProviders(), loadLibrary(false)]);
+    initPlayer();
     bindEvents();
   }
 
@@ -117,9 +475,7 @@
       const d = await r.json();
       providersData = d.providers || [];
       renderProviderBadges();
-    } catch (e) {
-      console.warn('[providers] failed:', e.message);
-    }
+    } catch (e) { console.warn('[providers] failed:', e.message); }
   }
 
   function renderProviderBadges() {
@@ -130,118 +486,78 @@
   }
 
   function bindEvents() {
-    // Search
     el.searchForm.addEventListener('submit', onSearch);
     el.refreshLibBtn?.addEventListener('click', () => loadLibrary(true));
-
-    // Mode toggle
     el.modeToggle?.querySelectorAll('.mode-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         searchMode = btn.dataset.mode;
         el.modeToggle.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        el.searchInput.placeholder = searchMode === 'tracks'
-          ? 'Search tracks, albums…'
-          : 'Search artists, publishers…';
+        el.searchInput.placeholder = searchMode === 'tracks' ? 'Search tracks, albums…' : 'Search artists, publishers…';
       });
     });
-
-    // Navigation back buttons
     el.profileBackBtn?.addEventListener('click', () => {
-      hide(el.profileSection);
-      show(el.artistSection);
-      hide(el.albumTracksSection);
+      hide(el.profileSection); show(el.artistSection); hide(el.albumTracksSection);
     });
     el.albumBackBtn?.addEventListener('click', () => {
       hide(el.albumTracksSection);
-      // show albums grid again (scroll to it)
       el.profileAlbumsGrid.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-
-    // Download modal
     el.dlClose.addEventListener('click', closeModal);
     el.dlModal.addEventListener('click', e => { if (e.target === el.dlModal) closeModal(); });
     el.startDlBtn.addEventListener('click', startDownload);
     el.playNowBtn.addEventListener('click', playCompleted);
-
-    // Player
-    el.playerClose?.addEventListener('click', closePlayer);
   }
 
 
-
-  // ─── SEARCH DISPATCHER ────────────────────────────────────────────────────
+  // ─── SEARCH ───────────────────────────────────────────────────────────────
   async function onSearch(e) {
     e.preventDefault();
     const q = el.searchInput.value.trim();
     if (!q) return;
-
-    // Hide all result panels
-    hide(el.resultsSection);
-    hide(el.artistSection);
-    hide(el.profileSection);
-    el.resultsGrid.innerHTML = '';
-    el.artistGrid.innerHTML  = '';
-
-    if (searchMode === 'artists') {
-      await searchArtists(q);
-    } else {
-      await searchTracks(q);
-    }
+    hide(el.resultsSection); hide(el.artistSection); hide(el.profileSection);
+    el.resultsGrid.innerHTML = ''; el.artistGrid.innerHTML = '';
+    if (searchMode === 'artists') await searchArtists(q);
+    else await searchTracks(q);
   }
 
-  // ─── TRACK SEARCH ─────────────────────────────────────────────────────────
   async function searchTracks(q) {
-    show(el.resultsSection);
-    hide(el.resultsHeader);
-    show(el.loadingSpinner);
+    show(el.resultsSection); hide(el.resultsHeader); show(el.loadingSpinner);
     el.searchBtn.disabled = true;
-
     try {
-      const r    = await fetch(`/api/unified-search?q=${encodeURIComponent(q)}&limit=20`);
+      const r = await fetch(`/api/unified-search?q=${encodeURIComponent(q)}&limit=20`);
       const data = await r.json();
       if (data.error) throw new Error(data.error);
-
-      hide(el.loadingSpinner);
-      el.searchBtn.disabled = false;
-
+      hide(el.loadingSpinner); el.searchBtn.disabled = false;
       const tracks = data.tracks || [];
       if (!tracks.length) {
-        el.resultsGrid.innerHTML = `<div class="no-results">
-          <i class="fas fa-search"></i>
-          <p>Tidak ada hasil untuk "<strong>${esc(q)}</strong>"</p>
-        </div>`;
-        show(el.resultsHeader);
-        el.resultsMeta.textContent = '0 results';
-        return;
+        el.resultsGrid.innerHTML = `<div class="no-results"><i class="fas fa-search"></i><p>Tidak ada hasil untuk "<strong>${esc(q)}</strong>"</p></div>`;
+        show(el.resultsHeader); el.resultsMeta.textContent = '0 results'; return;
       }
-
       const errors = Object.keys(data.providerErrors || {}).length;
       el.resultsMeta.textContent = `${tracks.length} tracks · ${providersData.length - errors}/${providersData.length} providers`;
       show(el.resultsHeader);
+      // Build queue for prev/next
+      playerState.queue = tracks.map(t => ({ ...t, _isSearchResult: true }));
       renderTracks(tracks);
     } catch (err) {
-      hide(el.loadingSpinner);
-      el.searchBtn.disabled = false;
-      el.resultsGrid.innerHTML = `<div class="no-results error">
-        <i class="fas fa-exclamation-circle"></i>
-        <p>Search gagal: ${esc(err.message)}</p>
-      </div>`;
+      hide(el.loadingSpinner); el.searchBtn.disabled = false;
+      el.resultsGrid.innerHTML = `<div class="no-results error"><i class="fas fa-exclamation-circle"></i><p>Search gagal: ${esc(err.message)}</p></div>`;
       show(el.resultsHeader);
     }
   }
 
   function renderTracks(tracks) {
     el.resultsGrid.innerHTML = '';
-    tracks.forEach(track => el.resultsGrid.appendChild(buildTrackCard(track)));
+    tracks.forEach((track, idx) => {
+      const card = buildTrackCard(track, idx);
+      el.resultsGrid.appendChild(card);
+    });
   }
 
-  function buildTrackCard(track) {
+  function buildTrackCard(track, queueIdx) {
     const hasQobuz  = track.providers?.some(p => p.key === 'qobuz');
-    const provChips = (track.providers || [])
-      .map(p => `<span class="chip" title="${p.name}">${p.icon}</span>`)
-      .join('');
-
+    const provChips = (track.providers || []).map(p => `<span class="chip" title="${p.name}">${p.icon}</span>`).join('');
     const card = document.createElement('div');
     card.className = 'track-card';
     card.innerHTML = `
@@ -259,60 +575,39 @@
         </div>
       </div>
       <div class="card-actions">
-        <button class="btn-stream" title="${hasQobuz ? 'Stream via Qobuz' : 'Stream / Download'}">
-          <i class="fas fa-bolt"></i>
-        </button>
-        <button class="btn-dl" title="Download">
-          <i class="fas fa-download"></i>
-        </button>
-      </div>
-    `;
-
+        <button class="btn-stream" title="${hasQobuz ? 'Stream via Qobuz' : 'Stream / Download'}"><i class="fas fa-bolt"></i></button>
+        <button class="btn-dl" title="Download"><i class="fas fa-download"></i></button>
+      </div>`;
     card.querySelector('.btn-stream').addEventListener('click', e => {
-      e.stopPropagation(); handleStream(track);
+      e.stopPropagation();
+      if (queueIdx !== undefined) playerState.queueIdx = queueIdx;
+      handleStream(track);
     });
-    card.querySelector('.btn-dl').addEventListener('click', e => {
-      e.stopPropagation(); openDownloadModal(track, false);
-    });
+    card.querySelector('.btn-dl').addEventListener('click', e => { e.stopPropagation(); openDownloadModal(track, false); });
     return card;
   }
 
-  // ─── ARTIST SEARCH ────────────────────────────────────────────────────────
   async function searchArtists(q) {
     show(el.artistSection);
     el.artistMeta.textContent = '';
     el.artistGrid.innerHTML = `<div class="spinner-inline"><div class="bounce1"></div><div class="bounce2"></div><div class="bounce3"></div></div>`;
     el.searchBtn.disabled = true;
-
     try {
       const r = await fetch(`/api/unified-search-artist?q=${encodeURIComponent(q)}&limit=20`);
       const d = await r.json();
-
       el.searchBtn.disabled = false;
-
       if (d.error) throw new Error(d.error);
-
       const artists = d.artists || [];
       const errors  = Object.keys(d.providerErrors || {}).length;
-
       if (!artists.length) {
-        el.artistGrid.innerHTML = `<div class="no-results">
-          <i class="fas fa-user-slash"></i>
-          <p>Tidak ada artist ditemukan untuk "<strong>${esc(q)}</strong>"</p>
-        </div>`;
-        el.artistMeta.textContent = '0 artists found';
-        return;
+        el.artistGrid.innerHTML = `<div class="no-results"><i class="fas fa-user-slash"></i><p>Tidak ada artist ditemukan untuk "<strong>${esc(q)}</strong>"</p></div>`;
+        el.artistMeta.textContent = '0 artists found'; return;
       }
-
       el.artistMeta.textContent = `${artists.length} artists · ${4 - errors}/4 providers`;
       renderArtistCards(artists);
-
     } catch (err) {
       el.searchBtn.disabled = false;
-      el.artistGrid.innerHTML = `<div class="no-results error">
-        <i class="fas fa-exclamation-circle"></i>
-        <p>Search gagal: ${esc(err.message)}</p>
-      </div>`;
+      el.artistGrid.innerHTML = `<div class="no-results error"><i class="fas fa-exclamation-circle"></i><p>Search gagal: ${esc(err.message)}</p></div>`;
       el.artistMeta.textContent = 'error';
     }
   }
@@ -320,58 +615,42 @@
   function renderArtistCards(artists) {
     el.artistGrid.innerHTML = '';
     artists.forEach(a => {
-      // provider chips — yang ditemukan di berapa banyak provider
       const provChips = (a.providers || []).map(p => {
         const meta = providersData.find(pd => pd.key === p.key);
-        return meta
-          ? `<span class="chip" title="${meta.name}">${meta.icon}</span>`
-          : `<span class="chip">${p.key}</span>`;
+        return meta ? `<span class="chip" title="${meta.name}">${meta.icon}</span>` : `<span class="chip">${p.key}</span>`;
       }).join('');
-
-      // Best provider to use for artist profile (deezer preferred for rich data)
-      const PROFILE_PROV_PRIORITY = ['deezer', 'qobuz', 'tidal', 'amazon'];
-      const bestProvEntry = a.providers?.find(p => PROFILE_PROV_PRIORITY[0] === p.key)
-        || a.providers?.find(p => PROFILE_PROV_PRIORITY[1] === p.key)
-        || a.providers?.find(p => PROFILE_PROV_PRIORITY[2] === p.key)
-        || a.providers?.find(p => PROFILE_PROV_PRIORITY[3] === p.key)
-        || a.providers?.[0];
-
-      const profileProv   = bestProvEntry?.key || 'deezer';
-      const profileArtistId = bestProvEntry?.artistId || a.id;
-
+      const PRIO = ['deezer','qobuz','tidal','amazon'];
+      const best = a.providers?.find(p => p.key === PRIO[0]) || a.providers?.find(p => p.key === PRIO[1])
+        || a.providers?.find(p => p.key === PRIO[2]) || a.providers?.find(p => p.key === PRIO[3]) || a.providers?.[0];
+      const prov = best?.key || 'deezer';
+      const artistId = best?.artistId || a.id;
       const card = document.createElement('div');
       card.className = 'artist-card glass-panel';
       card.innerHTML = `
-        <img class="artist-card-img" src="${esc(a.picture || '')}" alt="${esc(a.name)}"
-             onerror="this.src=''; this.classList.add('no-img')">
+        <img class="artist-card-img" src="${esc(a.picture||'')}" alt="${esc(a.name)}" onerror="this.src='';this.classList.add('no-img')">
         <div class="artist-card-info">
           <div class="artist-card-name">${esc(a.name)}</div>
           <div class="artist-card-meta">
             ${a.albumsCount ? `<span><i class="fas fa-compact-disc"></i> ${a.albumsCount} albums</span>` : ''}
-            ${a.fans        ? `<span><i class="fas fa-heart"></i> ${fmtNum(a.fans)} fans</span>`        : ''}
+            ${a.fans ? `<span><i class="fas fa-heart"></i> ${fmtNum(a.fans)} fans</span>` : ''}
           </div>
           ${provChips ? `<div class="artist-card-providers">${provChips}</div>` : ''}
           <div class="artist-card-cta">View Profile <i class="fas fa-arrow-right"></i></div>
-        </div>
-      `;
-      card.addEventListener('click', () => showArtistProfile(profileArtistId, profileProv));
+        </div>`;
+      card.addEventListener('click', () => showArtistProfile(artistId, prov));
       el.artistGrid.appendChild(card);
     });
   }
 
+
   // ─── ARTIST PROFILE ───────────────────────────────────────────────────────
   async function showArtistProfile(artistId, prov) {
-    hide(el.artistSection);
-    hide(el.albumTracksSection);
-    show(el.profileSection);
-    show(el.profileAlbumsSpinner);
+    hide(el.artistSection); hide(el.albumTracksSection);
+    show(el.profileSection); show(el.profileAlbumsSpinner);
     el.profileAlbumsGrid.innerHTML = '';
-    el.profileName.textContent     = '…';
-    el.profilePicture.src          = '';
-
+    el.profileName.textContent = '…'; el.profilePicture.src = '';
     const provMeta = providersData.find(p => p.key === prov);
     el.profileProvLabel.textContent = provMeta ? `via ${provMeta.icon} ${provMeta.name}` : '';
-
     let data;
     try {
       const r = await fetch(`/api/artist?provider=${prov}&id=${encodeURIComponent(artistId)}`);
@@ -379,10 +658,8 @@
       if (data.error) throw new Error(data.error);
     } catch (err) {
       el.profileAlbumsGrid.innerHTML = `<div class="no-results error"><p>${esc(err.message)}</p></div>`;
-      hide(el.profileAlbumsSpinner);
-      return;
+      hide(el.profileAlbumsSpinner); return;
     }
-
     const a = data.artist;
     el.profilePicture.src = a.picture || '';
     el.profilePicture.onerror = () => { el.profilePicture.src = ''; };
@@ -390,29 +667,23 @@
     el.profileAlbumsCount.innerHTML = `<i class="fas fa-compact-disc"></i> ${a.albumsCount || 0} Albums`;
     el.profileFansCount.innerHTML   = `<i class="fas fa-heart"></i> ${fmtNum(a.fans || 0)} Fans`;
     hide(el.profileAlbumsSpinner);
-
     const albums = data.albums || [];
-    if (!albums.length) {
-      el.profileAlbumsGrid.innerHTML = '<p style="color:var(--text-2);padding:1rem">No albums found.</p>';
-      return;
-    }
-
+    if (!albums.length) { el.profileAlbumsGrid.innerHTML = '<p style="color:var(--text-2);padding:1rem">No albums found.</p>'; return; }
     albums.forEach(al => {
       const card = document.createElement('div');
       card.className = 'album-card';
       card.innerHTML = `
         <div class="album-art-wrap">
-          <img src="${al.cover || ''}" alt="${esc(al.title)}" onerror="this.style.display='none'">
+          <img src="${al.cover||''}" alt="${esc(al.title)}" onerror="this.style.display='none'">
           <div class="album-play-overlay"><i class="fas fa-list-ul"></i></div>
         </div>
         <div class="album-card-body">
           <div class="album-card-title">${esc(al.title)}</div>
           <div class="album-card-meta">
-            <span>${al.year || ''}</span>
+            <span>${al.year||''}</span>
             ${al.tracksCount ? `<span class="badge">${al.tracksCount} tracks</span>` : ''}
           </div>
-        </div>
-      `;
+        </div>`;
       card.addEventListener('click', () => showAlbumTracks(al.id, al, prov));
       el.profileAlbumsGrid.appendChild(card);
     });
@@ -420,20 +691,13 @@
 
   // ─── ALBUM TRACKS ─────────────────────────────────────────────────────────
   async function showAlbumTracks(albumId, albumInfo, prov) {
-    show(el.albumTracksSection);
-    show(el.albumTracksSpinner);
+    show(el.albumTracksSection); show(el.albumTracksSpinner);
     el.albumTracksList.innerHTML = '';
-
-    el.albumDetailCover.src           = albumInfo?.cover  || '';
-    el.albumDetailTitle.textContent   = albumInfo?.title  || 'Album';
-    el.albumDetailArtist.textContent  = albumInfo?.artist || '';
-    el.albumDetailMeta.textContent    = [
-      albumInfo?.tracksCount ? `${albumInfo.tracksCount} tracks` : '',
-      albumInfo?.year || ''
-    ].filter(Boolean).join(' · ');
-
+    el.albumDetailCover.src          = albumInfo?.cover  || '';
+    el.albumDetailTitle.textContent  = albumInfo?.title  || 'Album';
+    el.albumDetailArtist.textContent = albumInfo?.artist || '';
+    el.albumDetailMeta.textContent   = [albumInfo?.tracksCount ? `${albumInfo.tracksCount} tracks` : '', albumInfo?.year || ''].filter(Boolean).join(' · ');
     el.albumDetailCover.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
     let tracks = [];
     try {
       const r = await fetch(`/api/album?provider=${prov}&id=${encodeURIComponent(albumId)}`);
@@ -442,217 +706,122 @@
       tracks = d.tracks || [];
     } catch (err) {
       el.albumTracksList.innerHTML = `<div class="no-results error"><p>${esc(err.message)}</p></div>`;
-      hide(el.albumTracksSpinner);
-      return;
+      hide(el.albumTracksSpinner); return;
     }
-
     hide(el.albumTracksSpinner);
-
-    if (!tracks.length) {
-      el.albumTracksList.innerHTML = '<p style="color:var(--text-2);padding:1rem">No tracks found.</p>';
-      return;
-    }
-
-    // Build initial track objects with single provider
-    const trackObjects = tracks.map((t) => {
-      const cover = t.cover || albumInfo?.cover || '';
-      return {
-        id:        t.id,
-        title:     t.title,
-        artist:    t.artist || albumInfo?.artist || '',
-        album:     albumInfo?.title || '',
-        cover:     cover,
-        duration:  t.duration || 0,
-        isrc:      t.isrc || '',
-        trackNumber: t.trackNumber,
-        _provider: prov,
-        providers: providersData.filter(p => p.key === prov).map(p => ({
-          key: p.key, name: p.name, icon: p.icon,
-          trackId: t.id, canStream: p.canStream || false, qualities: p.qualities || []
-        }))
-      };
-    });
-
-    // Render rows dulu dengan 1 provider
+    if (!tracks.length) { el.albumTracksList.innerHTML = '<p style="color:var(--text-2);padding:1rem">No tracks found.</p>'; return; }
+    const trackObjects = tracks.map(t => ({
+      id: t.id, title: t.title, artist: t.artist || albumInfo?.artist || '',
+      album: albumInfo?.title || '', cover: t.cover || albumInfo?.cover || '',
+      duration: t.duration || 0, isrc: t.isrc || '', trackNumber: t.trackNumber, _provider: prov,
+      providers: providersData.filter(p => p.key === prov).map(p => ({
+        key: p.key, name: p.name, icon: p.icon, trackId: t.id, canStream: p.canStream || false, qualities: p.qualities || []
+      }))
+    }));
+    // Set as queue
+    playerState.queue = trackObjects;
     renderAlbumTrackRows(trackObjects, albumInfo);
-
-    // Enrich providers secara background via unified search
     enrichAlbumTracksProviders(trackObjects, albumInfo);
   }
 
-  /**
-   * Render baris track di album. trackObjects sudah berisi providers[].
-   */
   function renderAlbumTrackRows(trackObjects, albumInfo) {
     el.albumTracksList.innerHTML = '';
-    trackObjects.forEach((trackObj, idx) => {
-      const cover = trackObj.cover || albumInfo?.cover || '';
+    trackObjects.forEach((t, idx) => {
       const row = document.createElement('div');
-      row.className = 'track-row';
-      row.dataset.trackIdx = idx;
+      row.className = 'track-row'; row.dataset.trackIdx = idx;
       row.innerHTML = `
-        <span class="track-row-num">${trackObj.trackNumber || idx + 1}</span>
-        <img class="track-row-cover" src="${cover}" alt="" onerror="this.style.visibility='hidden'">
+        <span class="track-row-num">${t.trackNumber || idx + 1}</span>
+        <img class="track-row-cover" src="${t.cover}" alt="" onerror="this.style.visibility='hidden'">
         <div class="track-row-info">
-          <div class="track-row-title">${esc(trackObj.title)}</div>
-          <div class="track-row-artist">${esc(trackObj.artist || albumInfo?.artist || '')}</div>
+          <div class="track-row-title">${esc(t.title)}</div>
+          <div class="track-row-artist">${esc(t.artist || albumInfo?.artist || '')}</div>
         </div>
-        <span class="track-row-dur">${fmtDur(trackObj.duration)}</span>
+        <span class="track-row-dur">${fmtDur(t.duration)}</span>
         <div class="track-row-providers" style="display:flex;gap:2px;align-items:center;font-size:0.75rem"></div>
         <div class="track-row-actions">
           <button class="btn-stream-sm" title="Stream / Play"><i class="fas fa-bolt"></i></button>
           <button class="btn-dl-sm" title="Download"><i class="fas fa-download"></i></button>
-        </div>
-      `;
-
-      // Render provider chips awal
-      updateTrackRowProviderChips(row, trackObj.providers);
-
+        </div>`;
+      updateTrackRowProviderChips(row, t.providers);
       row.querySelector('.btn-stream-sm').addEventListener('click', e => {
-        e.stopPropagation(); handleStream(trackObj);
+        e.stopPropagation(); playerState.queueIdx = idx; handleStream(t);
       });
-      row.querySelector('.btn-dl-sm').addEventListener('click', e => {
-        e.stopPropagation(); openDownloadModal(trackObj, false);
-      });
-
+      row.querySelector('.btn-dl-sm').addEventListener('click', e => { e.stopPropagation(); openDownloadModal(t, false); });
       el.albumTracksList.appendChild(row);
     });
   }
 
-  /** Update provider chips di baris track */
   function updateTrackRowProviderChips(rowEl, providers) {
-    const chipsEl = rowEl.querySelector('.track-row-providers');
-    if (!chipsEl) return;
-    chipsEl.innerHTML = (providers || [])
-      .map(p => `<span class="chip" title="${p.name}">${p.icon}</span>`)
-      .join('');
+    const c = rowEl.querySelector('.track-row-providers');
+    if (!c) return;
+    c.innerHTML = (providers || []).map(p => `<span class="chip" title="${p.name}">${p.icon}</span>`).join('');
   }
 
-  /**
-   * Setelah render awal, lakukan unified search untuk setiap track
-   * agar provider yang tersedia dari semua layanan bisa digabungkan.
-   * Search dilakukan per-track menggunakan "Artist Title" sebagai query,
-   * lalu cocokkan berdasarkan ISRC atau title+artist+durasi (mirip logika dedup backend).
-   */
   async function enrichAlbumTracksProviders(trackObjects, albumInfo) {
-    // Buat query dari nama artist + album untuk cari semua track sekaligus
     const artist = albumInfo?.artist || trackObjects[0]?.artist || '';
     const album  = albumInfo?.title  || trackObjects[0]?.album  || '';
     if (!artist && !album) return;
-
-    const searchQuery = [artist, album].filter(Boolean).join(' ');
-
     let unifiedTracks = [];
     try {
-      const r = await fetch(`/api/unified-search?q=${encodeURIComponent(searchQuery)}&limit=20`);
+      const r = await fetch(`/api/unified-search?q=${encodeURIComponent([artist, album].filter(Boolean).join(' '))}&limit=20`);
       const d = await r.json();
       if (d.error) return;
       unifiedTracks = d.tracks || [];
     } catch { return; }
-
     if (!unifiedTracks.length) return;
-
-    // Cocokkan setiap track album ke hasil unified search
-    trackObjects.forEach((trackObj, idx) => {
-      const match = findMatchInUnified(trackObj, unifiedTracks);
+    trackObjects.forEach((t, idx) => {
+      const match = findMatchInUnified(t, unifiedTracks);
       if (!match) return;
-
-      // Gabungkan providers dari unified ke track
       let updated = false;
       (match.providers || []).forEach(up => {
-        if (!trackObj.providers.find(p => p.key === up.key)) {
-          trackObj.providers.push(up);
-          updated = true;
-        }
+        if (!t.providers.find(p => p.key === up.key)) { t.providers.push(up); updated = true; }
       });
-
-      // Isi field kosong dari unified result
-      if (!trackObj.isrc && match.isrc) trackObj.isrc = match.isrc;
-      if (!trackObj.cover && match.cover) trackObj.cover = match.cover;
-
-      // Update UI jika ada provider baru
+      if (!t.isrc && match.isrc) t.isrc = match.isrc;
+      if (!t.cover && match.cover) t.cover = match.cover;
       if (updated) {
         const row = el.albumTracksList.querySelector(`[data-track-idx="${idx}"]`);
-        if (row) updateTrackRowProviderChips(row, trackObj.providers);
+        if (row) updateTrackRowProviderChips(row, t.providers);
       }
     });
   }
 
-  /**
-   * Cari track yang cocok dari array unified tracks.
-   * Menggunakan ISRC exact match atau title+artist fuzzy match + durasi.
-   */
   function findMatchInUnified(track, unifiedTracks) {
-    const fz = s => String(s || '').toLowerCase().normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
-
-    const titleA  = fz(track.title);
-    const artistA = fz(track.artist);
-    const durA    = track.duration || 0;
-
+    const fz = s => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'');
+    const tA = fz(track.title), aA = fz(track.artist), dA = track.duration || 0;
     return unifiedTracks.find(u => {
-      // 1. ISRC exact match
       if (track.isrc && u.isrc && track.isrc === u.isrc) return true;
-
-      const titleB  = fz(u.title);
-      const artistB = fz(u.artist);
-
-      // 2. Title harus mirip
-      const titleMatch = titleA === titleB
-        || (titleA.length > 3 && titleB.startsWith(titleA))
-        || (titleB.length > 3 && titleA.startsWith(titleB));
-      if (!titleMatch) return false;
-
-      // 3. Artist harus ada overlap
-      const artistMatch = artistA === artistB
-        || artistA.includes(artistB)
-        || artistB.includes(artistA);
-      if (!artistMatch) return false;
-
-      // 4. Durasi ±5 detik jika tersedia
-      const durB = u.duration || 0;
-      if (durA > 0 && durB > 0) {
-        return Math.abs(durA - durB) <= 5000;
-      }
-
+      const tB = fz(u.title), aB = fz(u.artist);
+      const tm = tA === tB || (tA.length > 3 && tB.startsWith(tA)) || (tB.length > 3 && tA.startsWith(tB));
+      if (!tm) return false;
+      const am = aA === aB || aA.includes(aB) || aB.includes(aA);
+      if (!am) return false;
+      const dB = u.duration || 0;
+      if (dA > 0 && dB > 0) return Math.abs(dA - dB) <= 5000;
       return true;
     }) || null;
   }
 
 
-
   // ─── STREAM LOGIC ─────────────────────────────────────────────────────────
   async function handleStream(track) {
-    // 1. Check local library
     const localMatch = await findLocalTrack(track);
     if (localMatch) {
-      playInPlayer({
-        title: track.title, artist: track.artist, cover: track.cover || '',
-        streamUrl: localMatch.streamUrl, downloadUrl: localMatch.downloadUrl,
-        fileName:  localMatch.fileName
-      });
+      playInPlayer({ title: track.title, artist: track.artist, album: track.album || '',
+        cover: track.cover || '', isrc: track.isrc || '', duration: track.duration || 0,
+        streamUrl: localMatch.streamUrl, downloadUrl: localMatch.downloadUrl, fileName: localMatch.fileName });
       return;
     }
-
-    // 2. Try Qobuz
     const qProv = track.providers?.find(p => p.key === 'qobuz');
-    if (!qProv) {
-      openDownloadModal(track, true, 'Track tidak tersedia di Qobuz.');
-      return;
-    }
-
+    if (!qProv) { openDownloadModal(track, true, 'Track tidak tersedia di Qobuz.'); return; }
     setPlayerLoading(track, 'Memuat stream Qobuz…');
     try {
       const quality = qProv.qualities?.[2]?.value || '6';
-      const r = await fetch(
-        `/api/unified-stream-url?provider=qobuz&id=${encodeURIComponent(qProv.trackId)}&quality=${encodeURIComponent(quality)}`
-      );
+      const r = await fetch(`/api/unified-stream-url?provider=qobuz&id=${encodeURIComponent(qProv.trackId)}&quality=${encodeURIComponent(quality)}`);
       const data = await r.json();
       if (data.error || !data.canStream) throw new Error(data.error || 'Qobuz stream tidak tersedia');
-      playInPlayer({
-        title: track.title, artist: track.artist, cover: track.cover || '',
-        streamUrl: data.proxyUrl, fileName: `${track.artist} - ${track.title}`
-      });
+      playInPlayer({ title: track.title, artist: track.artist, album: track.album || '',
+        cover: track.cover || '', isrc: track.isrc || '', duration: track.duration || 0,
+        streamUrl: data.proxyUrl, fileName: `${track.artist} - ${track.title}` });
     } catch (err) {
       console.warn('[stream] Qobuz gagal:', err.message);
       closePlayer();
@@ -665,92 +834,54 @@
       const r = await fetch('/api/library');
       const d = await r.json();
       const lib = d.tracks || [];
-      const t = fuzzyTitle(track.title);
-      const a = fuzzyStr(track.artist);
+      const t = fuzzyTitle(track.title), a = fuzzyStr(track.artist);
       return lib.find(l => fuzzyTitle(l.title) === t && fuzzyStr(l.artist) === a) || null;
     } catch { return null; }
   }
 
   // ─── DOWNLOAD MODAL ───────────────────────────────────────────────────────
   function openDownloadModal(track, streamFailed = false, failedMsg = '') {
-    currentTrack     = track;
-    selectedProvider = null;
-    selectedQuality  = null;
-    completedDL      = null;
-
+    currentTrack = track; selectedProvider = null; selectedQuality = null; completedDL = null;
     el.dlTitle.textContent  = track.title;
     el.dlArtist.textContent = track.artist;
-    el.dlMeta.textContent   = [
-      track.album, fmtDur(track.duration),
-      track.isrc ? `ISRC: ${track.isrc}` : ''
-    ].filter(Boolean).join(' · ');
-
-    if (track.cover) {
-      el.dlCover.src = track.cover;
-      el.dlCover.onerror = () => hide(el.dlCover);
-      show(el.dlCover);
-    } else { hide(el.dlCover); }
-
+    el.dlMeta.textContent   = [track.album, fmtDur(track.duration), track.isrc ? `ISRC: ${track.isrc}` : ''].filter(Boolean).join(' · ');
+    if (track.cover) { el.dlCover.src = track.cover; el.dlCover.onerror = () => hide(el.dlCover); show(el.dlCover); }
+    else hide(el.dlCover);
     if (streamFailed) {
-      el.streamFailedMsg.textContent = failedMsg
-        ? `Streaming gagal: ${failedMsg}. Pilih provider untuk download.`
-        : 'Streaming via Qobuz tidak tersedia. Pilih provider untuk download.';
+      el.streamFailedMsg.textContent = failedMsg ? `Streaming gagal: ${failedMsg}. Pilih provider untuk download.` : 'Streaming via Qobuz tidak tersedia.';
       show(el.streamFailedNotice);
-    } else { hide(el.streamFailedNotice); }
-
-    hide(el.qualityStep);
-    hide(el.progressStep);
-    hide(el.doneStep);
+    } else hide(el.streamFailedNotice);
+    hide(el.qualityStep); hide(el.progressStep); hide(el.doneStep);
     el.startDlBtn.disabled = true;
-
     buildProviderPicker(track);
-    show(el.providerStep);
-    show(el.dlModal);
+    show(el.providerStep); show(el.dlModal);
   }
 
   function closeModal() {
-    hide(el.dlModal);
-    clearInterval(downloadPoll);
+    hide(el.dlModal); clearInterval(downloadPoll);
     currentTrack = selectedProvider = selectedQuality = null;
   }
 
   function buildProviderPicker(track) {
     el.providerPicker.innerHTML = '';
-    const available = providersData.filter(p => {
-      if (!track.providers?.length) return true;
-      return track.providers.some(tp => tp.key === p.key);
-    });
-
-    if (!available.length) {
-      el.providerPicker.innerHTML = '<p class="no-providers">Tidak ada provider tersedia.</p>';
-      return;
-    }
-
+    const available = providersData.filter(p => !track.providers?.length || track.providers.some(tp => tp.key === p.key));
+    if (!available.length) { el.providerPicker.innerHTML = '<p class="no-providers">Tidak ada provider tersedia.</p>'; return; }
     available.forEach(prov => {
       const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'prov-pick-btn';
-      btn.dataset.key = prov.key;
-      btn.innerHTML = `
-        <span class="prov-icon">${prov.icon}</span>
-        <span class="prov-name">${prov.name}</span>
-        ${prov.canStream ? '<span class="prov-tag stream-tag">⚡ Stream</span>' : ''}
-      `;
+      btn.type = 'button'; btn.className = 'prov-pick-btn'; btn.dataset.key = prov.key;
+      btn.innerHTML = `<span class="prov-icon">${prov.icon}</span><span class="prov-name">${prov.name}</span>${prov.canStream ? '<span class="prov-tag stream-tag">⚡ Stream</span>' : ''}`;
       btn.addEventListener('click', () => selectProvider(prov, btn));
       el.providerPicker.appendChild(btn);
     });
   }
 
   function selectProvider(prov, btnEl) {
-    selectedProvider = prov;
-    selectedQuality  = null;
+    selectedProvider = prov; selectedQuality = null;
     el.startDlBtn.disabled = true;
     el.providerPicker.querySelectorAll('.prov-pick-btn').forEach(b => b.classList.remove('selected'));
     btnEl.classList.add('selected');
     buildQualityPicker(prov);
-    show(el.qualityStep);
-    hide(el.progressStep);
-    hide(el.doneStep);
+    show(el.qualityStep); hide(el.progressStep); hide(el.doneStep);
   }
 
   function buildQualityPicker(prov) {
@@ -759,56 +890,37 @@
     if (!qualities.length) { selectedQuality = 'best'; el.startDlBtn.disabled = false; return; }
     qualities.forEach((q, i) => {
       const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'quality-btn' + (i === 0 ? ' selected' : '');
-      btn.dataset.value = q.value;
-      btn.textContent = q.name;
+      btn.type = 'button'; btn.className = 'quality-btn' + (i === 0 ? ' selected' : ''); btn.dataset.value = q.value; btn.textContent = q.name;
       btn.addEventListener('click', () => {
         el.qualityPicker.querySelectorAll('.quality-btn').forEach(b => b.classList.remove('selected'));
-        btn.classList.add('selected');
-        selectedQuality = q.value;
-        el.startDlBtn.disabled = false;
+        btn.classList.add('selected'); selectedQuality = q.value; el.startDlBtn.disabled = false;
       });
       el.qualityPicker.appendChild(btn);
     });
-    selectedQuality = qualities[0].value;
-    el.startDlBtn.disabled = false;
+    selectedQuality = qualities[0].value; el.startDlBtn.disabled = false;
   }
 
-  // ─── DOWNLOAD ─────────────────────────────────────────────────────────────
   async function startDownload() {
     if (!currentTrack || !selectedProvider || !selectedQuality) return;
-
     let provTrackId = currentTrack.id;
     if (currentTrack.providers?.length) {
       const pm = currentTrack.providers.find(p => p.key === selectedProvider.key);
       if (pm) provTrackId = pm.trackId;
     }
-
-    const trackPayload = {
-      id: provTrackId, title: currentTrack.title, artist: currentTrack.artist,
+    const payload = { id: provTrackId, title: currentTrack.title, artist: currentTrack.artist,
       album: currentTrack.album || '', cover: currentTrack.cover || '',
-      duration: currentTrack.duration || 0, isrc: currentTrack.isrc || ''
-    };
-
-    hide(el.providerStep); hide(el.qualityStep); hide(el.doneStep);
-    show(el.progressStep);
-    el.dlStatus.textContent = 'Memulai download…';
-    el.dlPct.textContent    = '0%';
-    el.dlBar.style.width    = '0%';
-
+      duration: currentTrack.duration || 0, isrc: currentTrack.isrc || '' };
+    hide(el.providerStep); hide(el.qualityStep); hide(el.doneStep); show(el.progressStep);
+    el.dlStatus.textContent = 'Memulai download…'; el.dlPct.textContent = '0%'; el.dlBar.style.width = '0%';
     try {
       const r = await fetch('/api/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: selectedProvider.key, track: trackPayload, quality: selectedQuality })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: selectedProvider.key, track: payload, quality: selectedQuality })
       });
       const d = await r.json();
       if (d.error) throw new Error(d.error);
       pollDownload(d.jobId);
-    } catch (err) {
-      el.dlStatus.textContent = `Error: ${err.message}`;
-    }
+    } catch (err) { el.dlStatus.textContent = `Error: ${err.message}`; }
   }
 
   function pollDownload(jobId) {
@@ -818,10 +930,8 @@
         const r = await fetch(`/api/download/${jobId}/progress`);
         const d = await r.json();
         const pct = d.progress || 0;
-        el.dlPct.textContent  = `${pct}%`;
-        el.dlBar.style.width  = `${pct}%`;
-        el.dlStatus.textContent = d.status === 'downloading' ? 'Downloading…'
-          : d.status === 'pending' ? 'Menunggu…' : d.status;
+        el.dlPct.textContent = `${pct}%`; el.dlBar.style.width = `${pct}%`;
+        el.dlStatus.textContent = d.status === 'downloading' ? 'Downloading…' : d.status === 'pending' ? 'Menunggu…' : d.status;
         if (d.status === 'completed') {
           clearInterval(downloadPoll);
           completedDL = { streamUrl: d.streamUrl, fileUrl: d.fileUrl, fileName: d.fileName || d.fileUrl?.split('/').pop() };
@@ -831,8 +941,7 @@
           playCompleted();
           loadLibrary(false);
         } else if (d.status === 'error') {
-          clearInterval(downloadPoll);
-          el.dlStatus.textContent = `Error: ${d.error}`;
+          clearInterval(downloadPoll); el.dlStatus.textContent = `Error: ${d.error}`;
         }
       } catch {}
     }, 700);
@@ -840,46 +949,12 @@
 
   function playCompleted() {
     if (!completedDL?.streamUrl) return;
-    playInPlayer({
-      title: currentTrack?.title || '', artist: currentTrack?.artist || '',
-      cover: currentTrack?.cover || '', streamUrl: completedDL.streamUrl,
-      downloadUrl: completedDL.fileUrl, fileName: completedDL.fileName
-    });
+    playInPlayer({ title: currentTrack?.title || '', artist: currentTrack?.artist || '',
+      album: currentTrack?.album || '', cover: currentTrack?.cover || '',
+      isrc: currentTrack?.isrc || '', duration: currentTrack?.duration || 0,
+      streamUrl: completedDL.streamUrl, downloadUrl: completedDL.fileUrl, fileName: completedDL.fileName });
   }
 
-  // ─── PLAYER ───────────────────────────────────────────────────────────────
-  function setPlayerLoading(track, msg) {
-    show(el.musicPlayer);
-    el.playerTitle.textContent  = track?.title  || 'Loading…';
-    el.playerArtist.textContent = msg || track?.artist || '';
-    if (track?.cover) { el.playerCover.src = track.cover; show(el.playerCover); }
-    else hide(el.playerCover);
-    el.playerAudio.removeAttribute('src');
-    el.playerAudio.load();
-  }
-
-  function playInPlayer(item) {
-    if (!item?.streamUrl) return;
-    show(el.musicPlayer);
-    el.playerTitle.textContent  = item.title  || 'Unknown';
-    el.playerArtist.textContent = item.artist || '—';
-    if (item.cover) { el.playerCover.src = item.cover; show(el.playerCover); }
-    else hide(el.playerCover);
-    if (item.downloadUrl) {
-      el.playerDownload.href = item.downloadUrl;
-      el.playerDownload.setAttribute('download', item.fileName || 'track');
-    }
-    el.playerAudio.src = item.streamUrl;
-    el.playerAudio.load();
-    el.playerAudio.play().catch(() => {
-      el.playerArtist.textContent = (item.artist || '—') + ' · press play';
-    });
-  }
-
-  function closePlayer() {
-    if (el.playerAudio) { el.playerAudio.pause(); el.playerAudio.removeAttribute('src'); el.playerAudio.load(); }
-    hide(el.musicPlayer);
-  }
 
   // ─── LOCAL LIBRARY ────────────────────────────────────────────────────────
   async function loadLibrary(showEmpty) {
@@ -911,13 +986,10 @@
           <div class="lib-title">${esc(t.title || t.fileName)}</div>
           <div class="lib-artist">${esc(t.artist || 'Unknown')} · ${fmtBytes(t.size)}</div>
         </div>
-        <a class="lib-save" href="${t.downloadUrl}" download="${esc(t.fileName)}" title="Save">
-          <i class="fas fa-download"></i>
-        </a>
-      `;
+        <a class="lib-save" href="${t.downloadUrl}" download="${esc(t.fileName)}" title="Save"><i class="fas fa-download"></i></a>`;
       row.querySelector('.lib-play').addEventListener('click', () =>
-        playInPlayer({ title: t.title || t.fileName, artist: t.artist || 'Unknown',
-                       streamUrl: t.streamUrl, downloadUrl: t.downloadUrl, fileName: t.fileName })
+        playInPlayer({ title: t.title || t.fileName, artist: t.artist || 'Unknown', album: '',
+          streamUrl: t.streamUrl, downloadUrl: t.downloadUrl, fileName: t.fileName })
       );
       el.libraryList.appendChild(row);
     });
