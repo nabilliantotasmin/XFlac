@@ -288,6 +288,21 @@ function downloadFile(url, dest, onProgress) {
 // PANDORA PROVIDER CLASS
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * Returns true if the URL is a Pandora preview/sample clip.
+ * Pandora preview URLs typically come from akamaized.net with /previews/
+ * in the path, or are explicitly marked as samples.
+ */
+function isPandoraPreviewUrl(url) {
+  if (!url) return false;
+  const u = String(url).toLowerCase();
+  if (u.includes('/previews/')) return true;
+  if (u.includes('/preview/')) return true;
+  if (u.includes('preview=true')) return true;
+  if (u.includes('/samples/')) return true;
+  return false;
+}
+
 class PandoraProvider {
   constructor() {
     this.name = 'Pandora';
@@ -337,8 +352,15 @@ class PandoraProvider {
   }
 
   /**
+   * ─ STREAMING PATH ────────────────────────────────────────────────────────
    * Returns the raw stream URL without downloading to disk.
    * Used by /api/stream-url for direct in-browser playback.
+   *
+   * Difference vs download():
+   *  • Returns URL immediately → browser plays via /api/proxy-stream
+   *  • Skips Deezer metadata resolution (not needed for streaming)
+   *  • Rejects CDN preview URLs (akamaized.net /previews/ paths)
+   * ─────────────────────────────────────────────────────────────────────────
    */
   async getStreamUrlOnly(trackId, quality = 'mp3_192') {
     const fakeTrack = { id: trackId };
@@ -372,14 +394,25 @@ class PandoraProvider {
       throw new Error('No streamable Pandora URL available');
     }
 
+    // Reject preview/sample URLs
+    if (isPandoraPreviewUrl(selectedLink.url)) {
+      throw new Error('Pandora returned a preview/sample URL — full track not available via this resolver.');
+    }
+
     const encoding = String(selectedLink.encoding || '').toLowerCase();
     let format = 'mp3';
     if (encoding.includes('aac') || /\.m4a/i.test(selectedLink.url)) format = 'm4a';
 
-    console.log(`[Pandora] Stream URL resolved for ${pandoraID}: ${format}`);
+    console.log(`[Pandora] Stream URL resolved for ${pandoraID}: ${format} — ${selectedLink.url.substring(0, 60)}...`);
     return { url: selectedLink.url, format, encrypted: false };
   }
 
+  /**
+   * ─ DOWNLOAD PATH ─────────────────────────────────────────────────────────
+   * Same API resolution as streaming but writes bytes to disk with progress.
+   * Also resolves Deezer metadata for ID3/FLAC tag enrichment.
+   * ─────────────────────────────────────────────────────────────────────────
+   */
   async download(track, quality, outputPath, onProgress) {
     let pandoraID;
     let resolvedTrack = null;

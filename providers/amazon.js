@@ -1286,7 +1286,13 @@ async function callAmazonStreamApis(asin, codec) {
 
       const result = api.extractResult(data);
       if (result && result.streamUrl) {
-        console.log(`[Amazon] Resolved via ${api.name} — codec=${result.codec}`);
+        // ── Reject preview/sample URLs — Amazon previews are short clips ──
+        if (isAmazonPreviewUrl(result.streamUrl)) {
+          console.warn(`[Amazon] ${api.name} returned a preview/sample URL — skipping`);
+          lastError = new Error(`${api.name}: returned preview URL`);
+          continue;
+        }
+        console.log(`[Amazon] Resolved via ${api.name} — codec=${result.codec}: ${result.streamUrl.substring(0, 60)}...`);
         return result;
       }
 
@@ -1326,14 +1332,36 @@ function downloadFile(url, dest, onProgress) {
 
 // ==================== Provider Class ====================
 
+/**
+ * Returns true if the URL is an Amazon Music preview/sample clip.
+ * Amazon preview URLs typically contain "previewaudio" or "sample" in the path,
+ * or come from a different CDN subdomain than full tracks.
+ */
+function isAmazonPreviewUrl(url) {
+  if (!url) return false;
+  const u = String(url).toLowerCase();
+  if (u.includes('previewaudio')) return true;
+  if (u.includes('/preview/')) return true;
+  if (u.includes('/sample/')) return true;
+  if (u.includes('preview=true')) return true;
+  return false;
+}
+
 class AmazonProvider {
   constructor() {
     this.name = 'Amazon';
   }
 
   /**
+   * ─ STREAMING PATH ────────────────────────────────────────────────────────
    * Resolve a direct stream URL for an Amazon track WITHOUT downloading.
    * Returns { streamUrl, decryptionKey, codec } or throws.
+   *
+   * Difference vs download():
+   *  • Returns URL immediately → browser plays via /api/proxy-stream
+   *  • No ffmpeg, no disk I/O, no temp files
+   *  • decryptionKey passed to proxy-stream for AES/CBCS decryption on-the-fly
+   * ─────────────────────────────────────────────────────────────────────────
    */
   async getStreamUrlOnly(asin, quality = 'flac') {
     const codec = qualityToCodec(quality);
@@ -1448,6 +1476,13 @@ class AmazonProvider {
   }
 
   // ── Download ──
+  /**
+   * ─ DOWNLOAD PATH ─────────────────────────────────────────────────────────
+   * Same URL resolution as streaming (callAmazonStreamApis) but writes to disk.
+   * Handles AES/CBCS encrypted streams via ffmpeg -decryption_key.
+   * Tries fallback codec chain (mha1 → eac3 → opus → flac) if primary fails.
+   * ─────────────────────────────────────────────────────────────────────────
+   */
   async download(track, quality, outputPath, onProgress) {
     const asin = String(track.id).trim();
     if (!ASIN_REGEX.test(asin)) {

@@ -72,6 +72,23 @@ const QOBUZ_STREAM_APIS = [
   }
 ];
 
+/**
+ * Returns true if the URL is a Qobuz sample/preview clip (not a full track).
+ * Qobuz sample URLs typically:
+ *  - come from samples.qobuz.com
+ *  - contain "/samples/" in the path
+ *  - have query param "sample=true" or similar
+ */
+function isQobuzPreviewUrl(url) {
+  if (!url) return false;
+  const u = String(url).toLowerCase();
+  if (u.includes('samples.qobuz.com')) return true;
+  if (u.includes('/samples/')) return true;
+  if (u.includes('sample=true')) return true;
+  if (u.includes('preview=true')) return true;
+  return false;
+}
+
 class QobuzProvider {
   constructor() {
     this.name = 'Qobuz';
@@ -170,7 +187,13 @@ class QobuzProvider {
 
         const streamUrl = api.extractUrl(data);
         if (streamUrl) {
-          console.log(`[qobuz] Resolved via ${api.name}`);
+          // ── Reject preview URLs — Qobuz CDN previews are short clips ──
+          if (isQobuzPreviewUrl(streamUrl)) {
+            console.warn(`[qobuz] ${api.name} returned a preview/sample URL — skipping`);
+            lastError = new Error(`${api.name}: returned preview/sample URL`);
+            continue;
+          }
+          console.log(`[qobuz] Resolved via ${api.name}: ${streamUrl.substring(0, 60)}...`);
           return streamUrl;
         }
 
@@ -186,6 +209,22 @@ class QobuzProvider {
     throw lastError || new Error('All Qobuz APIs failed');
   }
 
+  /**
+   * ─ STREAMING PATH ────────────────────────────────────────────────────────
+   * Returns the raw CDN URL for the browser to stream directly.
+   * Rejects sample/preview URLs (30-second clips).
+   * ─────────────────────────────────────────────────────────────────────────
+   */
+  async getStreamUrlOnly(trackId, quality = '6') {
+    const q = { 'HI_RES': '27', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
+    return this.getStreamUrl(trackId, q);
+  }
+
+  /**
+   * ─ DOWNLOAD PATH ─────────────────────────────────────────────────────────
+   * Same URL resolution as streaming but writes bytes to disk with progress.
+   * ─────────────────────────────────────────────────────────────────────────
+   */
   async download(track, quality, outputPath, onProgress) {
     const q = { 'HI_RES': '27', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
     const url = await this.getStreamUrl(track.id, q);

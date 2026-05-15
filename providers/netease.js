@@ -780,7 +780,13 @@ async function getDownloadUrlWithFallback(id, quality) {
       }
 
       if (url && url.startsWith('http')) {
-        console.log(`[NetEase] Download URL resolved via ${api.name}`);
+        // ── Reject NetEase preview URLs (music.163.com/song/media/outer = free 30s clip) ──
+        if (isNeteasePreviewUrl(url)) {
+          console.warn(`[NetEase] ${api.name} returned a preview URL — skipping`);
+          errors.push(`${api.name}: returned preview URL`);
+          continue;
+        }
+        console.log(`[NetEase] Download URL resolved via ${api.name}: ${url.substring(0, 60)}...`);
         return { url, source: api.name };
       }
 
@@ -796,6 +802,22 @@ async function getDownloadUrlWithFallback(id, quality) {
 // ═══════════════════════════════════════════════════════════════════════
 // FILE DOWNLOAD
 // ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Returns true if the URL is a NetEase 30-second preview clip.
+ * NetEase preview URLs:
+ *  - music.163.com/song/media/outer (public free-tier, capped to 30s or 1min)
+ *  - some public APIs return these when track is VIP-only
+ */
+function isNeteasePreviewUrl(url) {
+  if (!url) return false;
+  const u = String(url).toLowerCase();
+  if (u.includes('/song/media/outer')) return true;
+  if (u.includes('/preview/')) return true;
+  if (u.includes('preview=true')) return true;
+  if (u.includes('previewUrl')) return true;
+  return false;
+}
 
 function downloadFile(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
@@ -1029,12 +1051,19 @@ class NetEaseProvider {
   }
 
   // ─────────────────────────────────────────────────────────────────
-  // DOWNLOAD METHOD (Enhanced with 15 API fallback)
+  // STREAMING & DOWNLOAD METHODS
   // ─────────────────────────────────────────────────────────────────
 
   /**
+   * ─ STREAMING PATH ────────────────────────────────────────────────────────
    * Returns the raw stream URL without downloading to disk.
    * Used by /api/stream-url for direct in-browser playback.
+   *
+   * Difference vs download():
+   *  • Returns URL immediately → browser plays via /api/proxy-stream
+   *  • Rejects preview/free-tier URLs (music.163.com/song/media/outer)
+   *  • No disk I/O, no progress callbacks
+   * ─────────────────────────────────────────────────────────────────────────
    */
   async getStreamUrlOnly(trackId, quality = 'exhigh') {
     const id = String(trackId || '').trim();
@@ -1042,6 +1071,12 @@ class NetEaseProvider {
 
     const { url, source } = await getDownloadUrlWithFallback(id, quality);
     if (!url) throw new Error('No playable NetEase URL found. Track may be VIP-only or region-locked.');
+
+    // Extra guard — getDownloadUrlWithFallback already skips preview URLs,
+    // but double-check here so streaming never returns a 30s clip.
+    if (isNeteasePreviewUrl(url)) {
+      throw new Error('NetEase: only preview URLs available for this track (VIP-only or region-locked).');
+    }
 
     console.log(`[NetEase] Stream URL resolved via ${source}`);
 
@@ -1055,6 +1090,11 @@ class NetEaseProvider {
     return { url, format, encrypted: false };
   }
 
+  /**
+   * ─ DOWNLOAD PATH ─────────────────────────────────────────────────────────
+   * Same URL resolution as streaming but writes bytes to disk with progress.
+   * ─────────────────────────────────────────────────────────────────────────
+   */
   async download(track, quality = 'exhigh', outputPath, onProgress) {
     const id = String(track.id || '').trim();
     if (!id) throw new Error('Missing NetEase track ID');

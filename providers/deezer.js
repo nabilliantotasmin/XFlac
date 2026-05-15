@@ -87,6 +87,26 @@ const DEEZER_STREAM_APIS = [
 ];
 
 const _DEFAULT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+
+/**
+ * Returns true if the URL is a 30-second Deezer preview clip.
+ * Preview URLs typically:
+ *  - come from e-cdns-images.dzcdn.net or cdn-preview-*.dzcdn.net
+ *  - contain "/previews/" in the path
+ *  - end in ".mp3" on a Deezer CDN domain
+ * Full-duration URLs come from cdn-*.dzcdn.net WITHOUT "/previews/".
+ */
+function isPreviewUrl(url) {
+  if (!url) return false;
+  const u = String(url).toLowerCase();
+  // dzcdn.net preview paths
+  if (u.includes('/previews/')) return true;
+  if (u.includes('e-cdns-images.dzcdn.net')) return true;
+  if (/cdn-preview-[a-z]\.dzcdn\.net/.test(u)) return true;
+  // Some resolvers return Deezer web player preview embeds
+  if (u.includes('deezer.com/track') && u.includes('preview')) return true;
+  return false;
+}
 const _MAX_RETRIES = 2;
 const _RETRY_DELAY_MS = 500;
 const _API_TIMEOUT_MS = 15000;
@@ -937,13 +957,23 @@ class DeezerProvider {
   }
 
   async download(track, quality, outputPath, onProgress) {
-    const desc = await this._resolveDescriptor(track.id);
+    // ─ DOWNLOAD PATH ─────────────────────────────────────────────────────────
+    // Uses _resolveDescriptor (same APIs as streaming) but writes to disk.
+    // After download: optionally decrypts Blowfish-encrypted chunks,
+    // then applies ID3/FLAC tags via metadataTagger.
+    // ─────────────────────────────────────────────────────────────────────────
+    const desc = await this._resolveDescriptor(track.id, quality);
     if (!desc || desc.success !== true) {
       throw new Error(desc?.message || 'Resolver error');
     }
 
     const url = desc.download_url || desc.direct_download_url;
     if (!url) throw new Error('No download URL');
+
+    // Reject preview URLs — both streaming and download must get full tracks
+    if (isPreviewUrl(url)) {
+      throw new Error('All resolvers returned preview URLs (30s clips). The track may be region-locked or unavailable.');
+    }
 
     const needsDecrypt = desc.requires_client_decryption || desc.deezer_encrypted;
     const ext = (desc.deezer_format || 'flac').toLowerCase();
@@ -984,10 +1014,22 @@ class DeezerProvider {
   /**
    * Resolve a direct stream URL for a Deezer track WITHOUT downloading.
    * Returns { url, encrypted, format } or throws.
+   *
+   * ─ STREAMING vs DOWNLOAD ─────────────────────────────────────────────────
+   * Both paths share `_resolveDescriptor()` which tries multiple resolver APIs.
+   * The key difference:
+   *  • getStreamUrlOnly  → returns URL immediately to browser (via proxy-stream)
+   *  • download          → writes bytes to disk with progress callback
+   * Both paths reject preview URLs (dzcdn.net /previews/ paths, ≤30 s clips).
+   * ─────────────────────────────────────────────────────────────────────────
    */
-  async getStreamUrlOnly(trackId) {
-    const desc = await this._resolveDescriptor(trackId);
+  async getStreamUrlOnly(trackId, quality = 'flac') {
+    const desc = await this._resolveDescriptor(trackId, quality);
     if (!desc || !desc.download_url) throw new Error('Could not resolve Deezer stream URL');
+    // Reject preview URLs — they are 30-second clips, not full tracks
+    if (isPreviewUrl(desc.download_url)) {
+      throw new Error('Deezer resolver returned a preview URL (30s). Retrying with next API...');
+    }
     return {
       url: desc.download_url,
       encrypted: !!(desc.requires_client_decryption || desc.deezer_encrypted),
@@ -995,16 +1037,22 @@ class DeezerProvider {
     };
   }
 
-  async _resolveDescriptor(trackId) {
+  async _resolveDescriptor(trackId, quality = 'flac') {
     let lastError = null;
 
     for (const api of DEEZER_STREAM_APIS) {
       try {
         console.log(`[deezer] Trying resolver: ${api.name}`);
+
+        // Some APIs accept quality; pass it if supported
+        const body = typeof api.buildBody === 'function'
+          ? api.buildBody(trackId, quality)
+          : null;
+
         const res = await request(api.url, {
           method: api.method,
           headers: api.headers,
-          body: api.buildBody(trackId),
+          body,
           timeout: 20000
         });
 
@@ -1035,21 +1083,29 @@ class DeezerProvider {
         }
 
         const url = api.extractUrl(data);
-        if (url) {
-          console.log(`[deezer] Resolved via ${api.name}`);
-          return {
-            success: true,
-            download_url: url,
-            direct_download_url: url,
-            requires_client_decryption: data.requires_client_decryption || data.deezer_encrypted || false,
-            deezer_encrypted: data.deezer_encrypted || false,
-            deezer_format: data.deezer_format || data.format || data.codec || 'flac',
-            ...data
-          };
+        if (!url) {
+          console.warn(`[deezer] ${api.name} returned no URL, trying next API...`);
+          lastError = new Error(`${api.name}: no URL in response`);
+          continue;
         }
 
-        console.warn(`[deezer] ${api.name} returned no URL, trying next API...`);
-        lastError = new Error(`${api.name}: no URL in response`);
+        // ── CRITICAL: reject preview URLs (30-second clips from dzcdn.net /previews/) ──
+        if (isPreviewUrl(url)) {
+          console.warn(`[deezer] ${api.name} returned a preview URL — skipping to next API`);
+          lastError = new Error(`${api.name}: returned 30s preview URL`);
+          continue;
+        }
+
+        console.log(`[deezer] Resolved via ${api.name}: ${url.substring(0, 60)}...`);
+        return {
+          success: true,
+          download_url: url,
+          direct_download_url: url,
+          requires_client_decryption: data.requires_client_decryption || data.deezer_encrypted || false,
+          deezer_encrypted: data.deezer_encrypted || false,
+          deezer_format: data.deezer_format || data.format || data.codec || 'flac',
+          ...data
+        };
       } catch (e) {
         console.warn(`[deezer] ${api.name} failed: ${e.message}, trying next API...`);
         lastError = e;
