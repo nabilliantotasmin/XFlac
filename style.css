@@ -1080,6 +1080,14 @@ img { display: block; }
   text-align: right;
 }
 
+.track-row-providers {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
 .track-row-actions {
   display: flex;
   gap: .4rem;
