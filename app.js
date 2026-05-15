@@ -616,7 +616,10 @@
             <div class="track-item-artist">${esc(t.artist)}</div>
           </div>
           <span class="track-item-duration">${fmtDur(t.duration)}</span>
-          ${canStreamDirect() ? `<button class="track-item-stream" title="Stream langsung"><i class="fas fa-bolt"></i></button>` : ''}
+          ${canStreamDirect()
+            ? `<button class="track-item-stream" title="Stream langsung"><i class="fas fa-bolt"></i></button>`
+            : `<button class="track-item-play-dl" title="Play (download dulu)"><i class="fas fa-play"></i></button>`
+          }
           <button class="track-item-download" title="Download"><i class="fas fa-download"></i></button>
         `;
 
@@ -625,6 +628,9 @@
 
         const streamBtn = row.querySelector('.track-item-stream');
         if (streamBtn) streamBtn.addEventListener('click', (e) => { e.stopPropagation(); streamDirect(t); });
+
+        const playDlBtn = row.querySelector('.track-item-play-dl');
+        if (playDlBtn) playDlBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadAndPlay(t); });
 
         const dl = row.querySelector('.track-item-download');
         dl.addEventListener('click', (e) => { e.stopPropagation(); openDownloadModal(t); });
@@ -708,6 +714,8 @@
     tracks.forEach(t => {
       const card = document.createElement('div');
       card.className = 'track-card';
+      // Provider yang butuh download dulu sebelum play (tidak support stream langsung)
+      const needsDlPlay = !canStreamDirect();
       card.innerHTML = `
         <div class="card-image-wrapper">
           <img class="track-image" src="${t.cover || ''}" alt="" 
@@ -719,13 +727,18 @@
           <div class="track-artist">${esc(t.artist)} · ${fmtDur(t.duration)}</div>
         </div>
         <div class="track-card-actions">
-          ${canStreamDirect() ? `<button class="track-card-stream" type="button" title="Stream langsung (tanpa download)"><i class="fas fa-bolt"></i></button>` : ''}
+          ${canStreamDirect()
+            ? `<button class="track-card-stream" type="button" title="Stream langsung (tanpa download)"><i class="fas fa-bolt"></i></button>`
+            : `<button class="track-card-play-dl" type="button" title="Play (download dulu)"><i class="fas fa-play"></i></button>`
+          }
           <button class="track-card-download" type="button" title="Download"><i class="fas fa-download"></i></button>
         </div>
       `;
       card.addEventListener('click', () => openDownloadModal(t));
       const streamCardBtn = card.querySelector('.track-card-stream');
       if (streamCardBtn) streamCardBtn.addEventListener('click', (e) => { e.stopPropagation(); streamDirect(t); });
+      const playDlBtn = card.querySelector('.track-card-play-dl');
+      if (playDlBtn) playDlBtn.addEventListener('click', (e) => { e.stopPropagation(); downloadAndPlay(t); });
       card.querySelector('.track-card-download').addEventListener('click', (e) => { e.stopPropagation(); openDownloadModal(t); });
       els.resultsGrid.appendChild(card);
     });
@@ -751,11 +764,10 @@
     hide(els.progressContainer);
     hide(els.downloadComplete);
     show(els.startDownloadBtn);
-    // "Stream Langsung" hanya untuk provider yang support streaming langsung
-    if (els.streamNowBtn) {
-      if (canStreamDirect()) show(els.streamNowBtn);
-      else hide(els.streamNowBtn);
-    }
+    // Tombol "Stream Langsung" tidak ditampilkan di modal — stream langsung
+    // tersedia via tombol play di card (qobuz/pandora/soda/netease),
+    // sedangkan deezer/tidal/amazon harus download dulu via tombol play di card.
+    if (els.streamNowBtn) hide(els.streamNowBtn);
     completedDownload = null;
     if (els.playNowBtn) els.playNowBtn.disabled = true;
 
@@ -783,7 +795,6 @@
   function closeDownloadModal() {
     hide(els.downloadModal);
     clearInterval(downloadPoll);
-    if (els.streamNowBtn) show(els.streamNowBtn);
     const modalBody = els.downloadModal.querySelector('.modal-body');
     const oldHint = modalBody?.querySelector('#stream-hint-msg');
     if (oldHint) oldHint.remove();
