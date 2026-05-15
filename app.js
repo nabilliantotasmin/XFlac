@@ -8,7 +8,7 @@
 
   // ─── STATE ───
   let currentProvider = '';
-  let currentPlatform = 'netease';
+  let currentPlatform = 'kuwo';
   let providersData = [];
   let selectedTracks = new Map();
   let currentAlbumTracks = [];
@@ -265,7 +265,8 @@
   // ─── DIRECT STREAMING ────────────────────────────────────────────────────
   // Provider yang mendukung stream langsung (tanpa download ke disk).
   // Tidal, Deezer, Amazon TIDAK support — harus download dulu baru play.
-  const STREAM_DIRECT_PROVIDERS = new Set(['qobuz', 'pandora', 'soda', 'netease']);
+  // Kuwo SUPPORT getStreamUrlOnly → masuk stream direct.
+  const STREAM_DIRECT_PROVIDERS = new Set(['qobuz', 'pandora', 'kuwo']);
 
   function canStreamDirect() {
     return STREAM_DIRECT_PROVIDERS.has(currentProvider);
@@ -765,7 +766,7 @@
     hide(els.downloadComplete);
     show(els.startDownloadBtn);
     // Tombol "Stream Langsung" tidak ditampilkan di modal — stream langsung
-    // tersedia via tombol play di card (qobuz/pandora/soda/netease),
+    // tersedia via tombol play di card (qobuz/pandora/kuwo),
     // sedangkan deezer/tidal/amazon harus download dulu via tombol play di card.
     if (els.streamNowBtn) hide(els.streamNowBtn);
     completedDownload = null;

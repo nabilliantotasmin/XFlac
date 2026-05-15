@@ -30,8 +30,7 @@ const providers = {
   amazon: safeRequire(path.join(PROVIDERS_DIR, 'amazon')),
   tidal: safeRequire(path.join(PROVIDERS_DIR, 'tidal')),
   pandora: safeRequire(path.join(PROVIDERS_DIR, 'pandora')),
-  soda: safeRequire(path.join(PROVIDERS_DIR, 'soda')),
-  netease: safeRequire(path.join(PROVIDERS_DIR, 'netease'))
+  kuwo: safeRequire(path.join(PROVIDERS_DIR, 'kuwo'))
 };
 
 let tagFile = null;
@@ -309,17 +308,17 @@ function stdTrack(t, source) {
       isrc: t.isrc || ''
     };
   }
-  if (source === 'soda' || source === 'netease') {
+  if (source === 'kuwo') {
     return {
-      id: String(t.id),
-      title: t.title || 'Unknown',
-      artist: t.artist || 'Unknown',
-      artists: t.artists || [],
-      album: t.album || '',
-      albumId: t.albumId || '',
-      cover: t.cover || '',
+      id:       String(t.id),
+      title:    t.title   || 'Unknown',
+      artist:   t.artist  || 'Unknown',
+      album:    t.album   || '',
+      albumId:  t.albumId || '',
+      cover:    t.cover   || '',
       duration: t.duration || 0,
-      isrc: t.isrc || ''
+      isrc:     t.isrc    || '',
+      _audioUrl: t._audioUrl || ''
     };
   }
 
@@ -522,13 +521,12 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/api/providers' && m === 'GET') {
       const list = [
-        { key: 'deezer', name: 'Deezer', icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
-        { key: 'qobuz', name: 'Qobuz', icon: '💿', qualities: [{name:'27 (Hi-Res Max)',value:'27'},{name:'7 (Hi-Res)',value:'7'},{name:'6 (CD)',value:'6'}] },
-        { key: 'amazon', name: 'Amazon', icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
-        { key: 'tidal', name: 'Tidal', icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
-        { key: 'pandora', name: 'Pandora', icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] },
-        { key: 'soda', name: 'Soda Music', icon: '🥤', qualities: [{name:'Best available',value:'best'},{name:'High',value:'high'},{name:'Medium',value:'medium'},{name:'Low',value:'low'}] },
-        { key: 'netease', name: 'NetEase Cloud Music', icon: '☁️', qualities: [{name:'Best available',value:'best'},{name:'Standard 128k',value:'standard'},{name:'Higher 192k',value:'higher'},{name:'ExHigh 320k',value:'exhigh'},{name:'Lossless',value:'lossless'},{name:'Hi-Res',value:'hires'}] }
+        { key: 'deezer',  name: 'Deezer',       icon: '🎧', qualities: [{name:'FLAC',value:'flac'},{name:'MP3',value:'mp3'}] },
+        { key: 'qobuz',  name: 'Qobuz',        icon: '💿', qualities: [{name:'27 (Hi-Res Max)',value:'27'},{name:'7 (Hi-Res)',value:'7'},{name:'6 (CD)',value:'6'}] },
+        { key: 'amazon', name: 'Amazon',        icon: '📦', qualities: [{name:'FLAC Best',value:'best'},{name:'Opus 320',value:'opus'},{name:'Dolby Atmos',value:'mha1'}] },
+        { key: 'tidal',  name: 'Tidal',         icon: '🌊', qualities: [{name:'LOSSLESS',value:'LOSSLESS'},{name:'HI_RES',value:'HI_RES'},{name:'HIGH',value:'HIGH'}] },
+        { key: 'pandora',name: 'Pandora',       icon: '📻', qualities: [{name:'MP3 192kbps',value:'mp3_192'},{name:'AAC 64kbps',value:'aac_64'},{name:'AAC 32kbps',value:'aac_32'}] },
+        { key: 'kuwo',   name: 'Kuwo Music',    icon: '🎵', qualities: [{name:'FLAC Lossless',value:'flac'},{name:'MP3 320kbps',value:'320'},{name:'MP3 128kbps',value:'128'}] }
       ].filter(item => providers[item.key]);
       return json(res, { providers: list });
     }
@@ -616,11 +614,8 @@ const server = http.createServer(async (req, res) => {
           case 'pandora':
             // Pandora does not support artist search via API
             return json(res, { artists: [] });
-          case 'soda':
-            artists = await providers.soda.searchArtist(q, limit);
-            break;
-          case 'netease':
-            artists = await providers.netease.searchArtist(q, limit);
+          case 'kuwo':
+            artists = await providers.kuwo.searchArtist(q, limit);
             break;
         }
       } catch (err) {
@@ -653,11 +648,8 @@ const server = http.createServer(async (req, res) => {
             break;
           case 'pandora':
             return json(res, { error: 'Artist profile not supported for Pandora' }, 400);
-          case 'soda':
-            result = await providers.soda.getArtist(id);
-            break;
-          case 'netease':
-            result = await providers.netease.getArtist(id);
+          case 'kuwo':
+            result = await providers.kuwo.getArtist(id);
             break;
           default:
             return json(res, { error: 'Artist profile not supported for this provider' }, 400);
@@ -692,11 +684,8 @@ const server = http.createServer(async (req, res) => {
             break;
           case 'pandora':
             return json(res, { error: 'Album browsing not supported for Pandora' }, 400);
-          case 'soda':
-            result = await providers.soda.getAlbum(id);
-            break;
-          case 'netease':
-            result = await providers.netease.getAlbum(id);
+          case 'kuwo':
+            result = await providers.kuwo.getAlbum(id);
             break;
           default:
             return json(res, { error: 'Album not supported for this provider' }, 400);
@@ -1069,10 +1058,9 @@ server.listen(PORT, () => {
   console.log(`📁 Downloads folder: ${DL_DIR}`);
   console.log(`▶️  Streaming endpoint: /stream/<fileName>`);
   console.log(`🏷️  Metadata tagging: ${tagFile ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`👤 Artist search: ENABLED for Deezer, Qobuz, Tidal, Amazon, Soda Music, NetEase Cloud Music`);
+  console.log(`👤 Artist search: ENABLED for Deezer, Qobuz, Tidal, Amazon, Kuwo Music`);
   console.log(`📻 Pandora provider: ${providers.pandora ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`🥤 Soda Music provider: ${providers.soda ? 'LOADED' : 'NOT FOUND'}`);
-  console.log(`☁️  NetEase Cloud Music provider: ${providers.netease ? 'LOADED' : 'NOT FOUND'}`);
+  console.log(`🎵 Kuwo Music provider: ${providers.kuwo ? 'LOADED' : 'NOT FOUND'}`);
 }).on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`
