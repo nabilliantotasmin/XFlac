@@ -1011,32 +1011,6 @@ class DeezerProvider {
     return finalPath;
   }
 
-  /**
-   * Resolve a direct stream URL for a Deezer track WITHOUT downloading.
-   * Returns { url, encrypted, format } or throws.
-   *
-   * ─ STREAMING vs DOWNLOAD ─────────────────────────────────────────────────
-   * Both paths share `_resolveDescriptor()` which tries multiple resolver APIs.
-   * The key difference:
-   *  • getStreamUrlOnly  → returns URL immediately to browser (via proxy-stream)
-   *  • download          → writes bytes to disk with progress callback
-   * Both paths reject preview URLs (dzcdn.net /previews/ paths, ≤30 s clips).
-   * ─────────────────────────────────────────────────────────────────────────
-   */
-  async getStreamUrlOnly(trackId, quality = 'flac') {
-    const desc = await this._resolveDescriptor(trackId, quality);
-    if (!desc || !desc.download_url) throw new Error('Could not resolve Deezer stream URL');
-    // Reject preview URLs — they are 30-second clips, not full tracks
-    if (isPreviewUrl(desc.download_url)) {
-      throw new Error('Deezer resolver returned a preview URL (30s). Retrying with next API...');
-    }
-    return {
-      url: desc.download_url,
-      encrypted: !!(desc.requires_client_decryption || desc.deezer_encrypted),
-      format: desc.deezer_format || 'flac'
-    };
-  }
-
   async _resolveDescriptor(trackId, quality = 'flac') {
     let lastError = null;
 

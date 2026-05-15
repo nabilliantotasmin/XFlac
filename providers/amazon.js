@@ -1352,44 +1352,6 @@ class AmazonProvider {
     this.name = 'Amazon';
   }
 
-  /**
-   * ─ STREAMING PATH ────────────────────────────────────────────────────────
-   * Resolve a direct stream URL for an Amazon track WITHOUT downloading.
-   * Returns { streamUrl, decryptionKey, codec } or throws.
-   *
-   * Difference vs download():
-   *  • Returns URL immediately → browser plays via /api/proxy-stream
-   *  • No ffmpeg, no disk I/O, no temp files
-   *  • decryptionKey passed to proxy-stream for AES/CBCS decryption on-the-fly
-   * ─────────────────────────────────────────────────────────────────────────
-   */
-  async getStreamUrlOnly(asin, quality = 'flac') {
-    const rawAsin = String(asin).replace(/^amazon_/i, '').trim();
-    const codec = qualityToCodec(quality);
-    const result = await callAmazonStreamApis(rawAsin, codec);
-    if (result && result.error) throw new Error(`Amazon stream resolve failed: ${result.error}`);
-    if (!result || !result.streamUrl) throw new Error('Could not resolve Amazon stream URL');
-
-    // Normalise to the shape server.js expects:
-    //   { url, format, encrypted, decryptionKey }
-    const resolvedCodec = (result.codec || codec || 'flac').toLowerCase();
-    let format = 'flac';
-    if (resolvedCodec === 'opus') format = 'opus';
-    else if (resolvedCodec === 'eac3' || resolvedCodec === 'mha1') format = 'm4a';
-    else if (resolvedCodec === 'aac' || resolvedCodec === 'mp4' || resolvedCodec === 'm4a') format = 'm4a';
-    else if (resolvedCodec === 'mp3') format = 'mp3';
-
-    return {
-      url:           result.streamUrl,
-      streamUrl:     result.streamUrl,   // keep for backward compat
-      format,
-      codec:         resolvedCodec,
-      encrypted:     !!(result.decryptionKey),
-      decryptionKey: result.decryptionKey || '',
-      coverUrl:      result.coverUrl || ''
-    };
-  }
-
   // ── Search Tracks ──
   async search(query, limit = 8) {
     const data = await fetchWithRetry(() => callShowSearch(query));
