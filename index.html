@@ -256,11 +256,21 @@
                             <div id="player-title" class="player-title-text">Nothing playing</div>
                             <div id="player-artist" class="player-artist-text">—</div>
                             <div id="player-album" class="player-album-text"></div>
+                            <div id="player-hires-badge" class="player-hires-badge hidden">
+                                <span class="hires-icon">HR</span>
+                                <span id="player-audio-info" class="hires-info"></span>
+                            </div>
                         </div>
                         <a id="player-download" class="player-action-btn" href="#" download title="Save file">
                             <i class="fas fa-download"></i>
                         </a>
                     </div>
+                </div>
+
+                <!-- Buffering indicator -->
+                <div id="player-buffering" class="player-buffering hidden">
+                    <div class="buffering-spinner"></div>
+                    <span>Buffering Hi-Res audio…</span>
                 </div>
 
                 <!-- Progress bar -->
