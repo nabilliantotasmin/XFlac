@@ -211,6 +211,104 @@ function extractArtist(t) {
   return 'Unknown';
 }
 
+/**
+ * Detect audio file properties (bit depth, sample rate, channels, format).
+ * Reads the FLAC/WAV header directly without external dependencies.
+ */
+async function detectAudioInfo(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const fd = fs.openSync(filePath, 'r');
+  const info = { format: ext.replace('.', ''), bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false };
+
+  try {
+    if (ext === '.flac') {
+      // FLAC: Read STREAMINFO metadata block
+      // File starts with 'fLaC' (4 bytes), then metadata blocks
+      const header = Buffer.alloc(42);
+      fs.readSync(fd, header, 0, 42, 0);
+
+      if (header.toString('ascii', 0, 4) === 'fLaC') {
+        // Skip to STREAMINFO data (starts at byte 8 after 4-byte header + 4-byte block header)
+        // STREAMINFO: min_block(2) + max_block(2) + min_frame(3) + max_frame(3) + 
+        // sample_rate(20bits) + channels(3bits) + bps(5bits) + total_samples(36bits)
+        const streaminfo = Buffer.alloc(34);
+        fs.readSync(fd, streaminfo, 0, 34, 8);
+
+        // Bytes 10-13 contain: sample_rate (20 bits) | channels-1 (3 bits) | bps-1 (5 bits) | total_samples (MSB 4 bits)
+        const byte10 = streaminfo[10];
+        const byte11 = streaminfo[11];
+        const byte12 = streaminfo[12];
+
+        info.sampleRate = (byte10 << 12) | (byte11 << 4) | ((byte12 & 0xF0) >> 4);
+        info.channels = ((byte12 & 0x0E) >> 1) + 1;
+        info.bitDepth = ((byte12 & 0x01) << 4) | ((streaminfo[13] & 0xF0) >> 4);
+        info.bitDepth += 1; // stored as bps-1
+      }
+    } else if (ext === '.wav') {
+      // WAV: Read fmt chunk
+      const header = Buffer.alloc(44);
+      fs.readSync(fd, header, 0, 44, 0);
+
+      if (header.toString('ascii', 0, 4) === 'RIFF' && header.toString('ascii', 8, 12) === 'WAVE') {
+        info.channels = header.readUInt16LE(22);
+        info.sampleRate = header.readUInt32LE(24);
+        info.bitDepth = header.readUInt16LE(34);
+      }
+    }
+    // For mp3/m4a/opus — we can't easily detect without libraries, use defaults
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  // Determine if Hi-Res: bit depth > 16 OR sample rate > 44100
+  info.hiRes = info.bitDepth > 16 || info.sampleRate > 44100;
+
+  // Human-readable label
+  if (info.hiRes) {
+    info.label = `${info.bitDepth}-bit / ${(info.sampleRate / 1000).toFixed(info.sampleRate % 1000 === 0 ? 0 : 1)} kHz`;
+  } else {
+    info.label = `${info.bitDepth}-bit / ${(info.sampleRate / 1000).toFixed(info.sampleRate % 1000 === 0 ? 0 : 1)} kHz (CD)`;
+  }
+
+  return info;
+}
+
+/**
+ * Return expected audio quality info based on provider + quality tier.
+ * Used when streaming (file not yet on disk).
+ */
+function getExpectedAudioInfo(provider, quality) {
+  const specs = {
+    qobuz: {
+      '27': { format: 'flac', bitDepth: 24, sampleRate: 192000, channels: 2, hiRes: true, label: '24-bit / 192 kHz (Hi-Res Max)' },
+      '7':  { format: 'flac', bitDepth: 24, sampleRate: 96000,  channels: 2, hiRes: true, label: '24-bit / 96 kHz (Hi-Res)' },
+      '6':  { format: 'flac', bitDepth: 16, sampleRate: 44100,  channels: 2, hiRes: false, label: '16-bit / 44.1 kHz (CD Quality)' }
+    },
+    tidal: {
+      'HI_RES':   { format: 'flac', bitDepth: 24, sampleRate: 96000,  channels: 2, hiRes: true, label: '24-bit / 96 kHz (Hi-Res)' },
+      'LOSSLESS': { format: 'flac', bitDepth: 16, sampleRate: 44100,  channels: 2, hiRes: false, label: '16-bit / 44.1 kHz (Lossless)' },
+      'HIGH':     { format: 'aac',  bitDepth: 16, sampleRate: 44100,  channels: 2, hiRes: false, label: '320 kbps (High)' }
+    },
+    deezer: {
+      'flac': { format: 'flac', bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: '16-bit / 44.1 kHz (FLAC)' },
+      'mp3':  { format: 'mp3',  bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: 'MP3 320 kbps' }
+    },
+    amazon: {
+      'best': { format: 'flac', bitDepth: 24, sampleRate: 96000, channels: 2, hiRes: true, label: '24-bit / 96 kHz (Ultra HD)' },
+      'opus': { format: 'opus', bitDepth: 16, sampleRate: 48000, channels: 2, hiRes: false, label: 'Opus 320 kbps' },
+      'mha1': { format: 'm4a',  bitDepth: 24, sampleRate: 48000, channels: 6, hiRes: true, label: '24-bit Dolby Atmos' }
+    },
+    pandora: {
+      'mp3_192': { format: 'mp3', bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: 'MP3 192 kbps' },
+      'aac_64':  { format: 'aac', bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: 'AAC 64 kbps' }
+    }
+  };
+
+  const provSpecs = specs[provider];
+  if (!provSpecs) return { format: 'unknown', bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: 'Unknown' };
+  return provSpecs[quality] || provSpecs[Object.keys(provSpecs)[0]] || { format: 'unknown', bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: 'Unknown' };
+}
+
 async function applyTags(filePath, track) {
   if (!tagFile) return;
   try {
@@ -974,6 +1072,37 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // ─── AUDIO INFO (Hi-Res detection) ────────────────────────────────────────
+    // GET /api/audio-info?file=<fileName>
+    // Reads FLAC/audio file metadata (bit depth, sample rate, channels) from
+    // downloaded files. Used by the player to show Hi-Res badge.
+    if (p === '/api/audio-info' && m === 'GET') {
+      const fileName = parsed.searchParams.get('file');
+      if (!fileName) return json(res, { error: 'Missing file param' }, 400);
+
+      const filePath = path.join(DL_DIR, path.basename(fileName));
+      if (!fs.existsSync(filePath)) return json(res, { error: 'File not found' }, 404);
+
+      try {
+        const info = await detectAudioInfo(filePath);
+        return json(res, info);
+      } catch (err) {
+        return json(res, { error: err.message }, 500);
+      }
+    }
+
+    // ─── STREAM AUDIO INFO (Hi-Res detection for proxy streams) ───────────────
+    // GET /api/stream-audio-info?provider=qobuz&id=<trackId>&quality=27
+    // Returns expected audio quality info based on provider/quality selection.
+    if (p === '/api/stream-audio-info' && m === 'GET') {
+      const provKey = parsed.searchParams.get('provider');
+      const quality = parsed.searchParams.get('quality') || '6';
+
+      // Return expected audio specs based on provider quality tier
+      const info = getExpectedAudioInfo(provKey, quality);
+      return json(res, info);
+    }
+
     // ─── UNIFIED STREAM URL ───────────────────────────────────────────────────
     // GET /api/unified-stream-url?id=<trackId>&provider=qobuz&quality=6
     //
@@ -1118,7 +1247,7 @@ const server = http.createServer(async (req, res) => {
           };
           if (rangeHdr) hdrs['Range'] = rangeHdr;
 
-          const reqOut = client.get(url, { headers: hdrs, timeout: 30000 }, (remRes) => {
+          const reqOut = client.get(url, { headers: hdrs, timeout: 60000 }, (remRes) => {
             const sc = remRes.statusCode;
             if ([301, 302, 303, 307, 308].includes(sc) && remRes.headers.location) {
               remRes.resume(); // drain

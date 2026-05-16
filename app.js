@@ -79,6 +79,8 @@
     track: null, queue: [], queueIdx: -1,
     playing: false, shuffle: false, repeat: false,
     lyricsOpen: false, lyricsData: null, lyricsActiveIdx: -1, dragging: false,
+    audioContext: null, sourceNode: null, gainNode: null,
+    hiRes: false, audioInfo: null,
   };
 
   const P = {
@@ -91,6 +93,9 @@
     titleEl:        $('player-title'),
     artistEl:       $('player-artist'),
     albumEl:        $('player-album'),
+    hiresBadge:     $('player-hires-badge'),
+    audioInfoEl:    $('player-audio-info'),
+    bufferingEl:    $('player-buffering'),
     downloadBtn:    $('player-download'),
     progressBar:    $('player-progress-bar'),
     progressFill:   $('player-progress-fill'),
@@ -141,7 +146,9 @@
       P.repeatBtn.classList.toggle('active', playerState.repeat);
     });
     P.volumeSlider.addEventListener('input', () => {
-      P.audio.volume = parseFloat(P.volumeSlider.value);
+      const vol = parseFloat(P.volumeSlider.value);
+      P.audio.volume = vol;
+      if (playerState.gainNode) playerState.gainNode.gain.value = vol;
       updateMuteIcon();
     });
     P.muteBtn.addEventListener('click', () => { P.audio.muted = !P.audio.muted; updateMuteIcon(); });
@@ -156,9 +163,138 @@
     P.audio.addEventListener('play',  () => setPlayingVisuals(true));
     P.audio.addEventListener('pause', () => setPlayingVisuals(false));
     P.audio.addEventListener('ended', onEnded);
-    P.audio.addEventListener('error', () => setPlayingVisuals(false));
+    P.audio.addEventListener('error', onAudioError);
+    P.audio.addEventListener('waiting',  () => showBuffering(true));
+    P.audio.addEventListener('canplay',  () => showBuffering(false));
+    P.audio.addEventListener('playing',  () => showBuffering(false));
+    P.audio.addEventListener('stalled',  () => { if (playerState.hiRes) showBuffering(true); });
     P.lyricsToggle.addEventListener('click', toggleLyricsPanel);
     document.addEventListener('keydown', onPlayerKeydown);
+  }
+
+  /**
+   * Initialize Web Audio API context with high sample rate support.
+   * Uses MediaElementSource so we keep HTMLAudioElement for transport
+   * (seeking, Range requests) but route through AudioContext for proper
+   * Hi-Res decoding at native sample rate.
+   */
+  function ensureAudioContext(sampleRate) {
+    // If existing context matches required sample rate, reuse it
+    if (playerState.audioContext && playerState.audioContext.state !== 'closed') {
+      if (!sampleRate || playerState.audioContext.sampleRate === sampleRate) {
+        return playerState.audioContext;
+      }
+      // Sample rate mismatch — close and recreate
+      try {
+        playerState.sourceNode?.disconnect();
+        playerState.gainNode?.disconnect();
+        playerState.audioContext.close();
+      } catch (_) {}
+      playerState.audioContext = null;
+      playerState.sourceNode = null;
+      playerState.gainNode = null;
+    }
+
+    try {
+      const opts = {};
+      // Request high sample rate for Hi-Res content
+      if (sampleRate && sampleRate > 44100) {
+        opts.sampleRate = sampleRate;
+      }
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      playerState.audioContext = new AudioCtx(opts);
+
+      // Create source from audio element
+      playerState.sourceNode = playerState.audioContext.createMediaElementSource(P.audio);
+
+      // Create gain node for volume control through Web Audio pipeline
+      playerState.gainNode = playerState.audioContext.createGain();
+      playerState.gainNode.gain.value = parseFloat(P.volumeSlider.value);
+
+      // Connect: source → gain → destination
+      playerState.sourceNode.connect(playerState.gainNode);
+      playerState.gainNode.connect(playerState.audioContext.destination);
+
+      console.log(`[player] AudioContext created: ${playerState.audioContext.sampleRate} Hz`);
+    } catch (err) {
+      console.warn('[player] Web Audio API failed, using HTMLAudioElement fallback:', err.message);
+      playerState.audioContext = null;
+    }
+
+    return playerState.audioContext;
+  }
+
+  function showBuffering(show) {
+    if (P.bufferingEl) {
+      P.bufferingEl.classList.toggle('hidden', !show);
+    }
+  }
+
+  function onAudioError() {
+    setPlayingVisuals(false);
+    showBuffering(false);
+    // If Hi-Res playback fails, the browser might not support the sample rate
+    if (playerState.hiRes && playerState.audioContext) {
+      console.warn('[player] Hi-Res playback error — browser may not support this sample rate');
+    }
+  }
+
+  function updateHiResBadge(audioInfo) {
+    playerState.audioInfo = audioInfo;
+    playerState.hiRes = audioInfo?.hiRes || false;
+
+    if (audioInfo && audioInfo.hiRes) {
+      P.audioInfoEl.textContent = audioInfo.label || `${audioInfo.bitDepth}-bit / ${(audioInfo.sampleRate / 1000).toFixed(1)} kHz`;
+      P.hiresBadge.classList.remove('hidden');
+    } else if (audioInfo && audioInfo.label) {
+      // Show quality info even for non-Hi-Res (but without golden glow)
+      P.audioInfoEl.textContent = audioInfo.label;
+      P.hiresBadge.classList.remove('hidden');
+      P.hiresBadge.style.background = 'rgba(255,255,255,.06)';
+      P.hiresBadge.style.borderColor = 'rgba(255,255,255,.15)';
+      P.hiresBadge.style.animation = 'none';
+      P.hiresBadge.querySelector('.hires-icon').style.background = 'rgba(255,255,255,.2)';
+      P.hiresBadge.querySelector('.hires-icon').style.color = 'var(--text-2)';
+      P.hiresBadge.querySelector('.hires-icon').textContent = 'CD';
+    } else {
+      P.hiresBadge.classList.add('hidden');
+    }
+  }
+
+  function resetHiResBadge() {
+    P.hiresBadge.classList.add('hidden');
+    // Reset badge styling to default Hi-Res gold
+    P.hiresBadge.style.background = '';
+    P.hiresBadge.style.borderColor = '';
+    P.hiresBadge.style.animation = '';
+    const icon = P.hiresBadge.querySelector('.hires-icon');
+    if (icon) { icon.style.background = ''; icon.style.color = ''; icon.textContent = 'HR'; }
+    playerState.hiRes = false;
+    playerState.audioInfo = null;
+  }
+
+  /**
+   * Fetch audio info for a local file (already downloaded).
+   */
+  async function fetchAudioInfoForFile(fileName) {
+    try {
+      const r = await fetch(`/api/audio-info?file=${encodeURIComponent(fileName)}`);
+      const info = await r.json();
+      if (!info.error) return info;
+    } catch (_) {}
+    return null;
+  }
+
+  /**
+   * Get expected audio info for a streaming provider + quality.
+   */
+  async function fetchStreamAudioInfo(provider, quality) {
+    try {
+      const r = await fetch(`/api/stream-audio-info?provider=${encodeURIComponent(provider)}&quality=${encodeURIComponent(quality)}`);
+      const info = await r.json();
+      if (!info.error) return info;
+    } catch (_) {}
+    return null;
   }
 
   function openPlayerModal() {
@@ -181,6 +317,8 @@
     playerState.track = null;
     playerState.playing = false;
     setPlayingVisuals(false);
+    resetHiResBadge();
+    showBuffering(false);
   }
 
   function setPlayerLoading(track, msg) {
@@ -194,10 +332,48 @@
     if (!item?.streamUrl) return;
     playerState.track = item;
     _applyTrackMeta(item);
+    resetHiResBadge();
+    showBuffering(false);
     if (item.downloadUrl) {
       P.downloadBtn.href = item.downloadUrl;
       P.downloadBtn.setAttribute('download', item.fileName || 'track');
     }
+
+    // Detect Hi-Res: fetch audio info then set up Web Audio API
+    const setupHiRes = async () => {
+      let audioInfo = null;
+
+      if (item.fileName) {
+        // Local file — detect actual bit depth/sample rate from file header
+        audioInfo = await fetchAudioInfoForFile(item.fileName);
+      } else if (item._provider && item._quality) {
+        // Streaming — use expected quality from provider
+        audioInfo = await fetchStreamAudioInfo(item._provider, item._quality);
+      } else if (item.streamUrl.includes('proxy-stream')) {
+        // Proxy stream from Qobuz — detect from provider quality
+        audioInfo = await fetchStreamAudioInfo('qobuz', item._quality || '6');
+      }
+
+      if (audioInfo) {
+        updateHiResBadge(audioInfo);
+
+        // Set up Web Audio Context with appropriate sample rate for Hi-Res
+        if (audioInfo.hiRes && audioInfo.sampleRate > 44100) {
+          ensureAudioContext(audioInfo.sampleRate);
+          showBuffering(true); // Hi-Res files are large, show buffering
+        } else if (!playerState.audioContext) {
+          ensureAudioContext(); // Standard sample rate
+        }
+      } else if (!playerState.audioContext) {
+        ensureAudioContext(); // Fallback: standard context
+      }
+    };
+
+    // Resume AudioContext if suspended (browser autoplay policy)
+    if (playerState.audioContext?.state === 'suspended') {
+      playerState.audioContext.resume();
+    }
+
     P.audio.src = item.streamUrl;
     P.audio.load();
     P.audio.play().catch(() => {});
@@ -209,6 +385,9 @@
     hide(P.lyricsNoAvail);
     hide(P.lyricsLoading);
     fetchAndRenderLyrics(item);
+
+    // Fetch audio info async (don't block playback)
+    setupHiRes();
   }
 
   function _applyTrackMeta(item) {
@@ -836,13 +1015,14 @@
     if (!qProv) { openDownloadModal(track, true, 'Track tidak tersedia di Qobuz.'); return; }
     setPlayerLoading(track, 'Memuat stream Qobuz…');
     try {
-      const quality = qProv.qualities?.[2]?.value || '6';
+      const quality = qProv.qualities?.[0]?.value || '27';
       const r = await fetch(`/api/unified-stream-url?provider=qobuz&id=${encodeURIComponent(qProv.trackId)}&quality=${encodeURIComponent(quality)}`);
       const data = await r.json();
       if (data.error || !data.canStream) throw new Error(data.error || 'Qobuz stream tidak tersedia');
       playInPlayer({ title: track.title, artist: track.artist, album: track.album || '',
         cover: track.cover || '', isrc: track.isrc || '', duration: track.duration || 0,
-        streamUrl: data.proxyUrl, fileName: `${track.artist} - ${track.title}` });
+        streamUrl: data.proxyUrl, fileName: `${track.artist} - ${track.title}`,
+        _provider: 'qobuz', _quality: quality });
     } catch (err) {
       console.warn('[stream] Qobuz gagal:', err.message);
       closePlayer();
