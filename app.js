@@ -174,51 +174,65 @@
 
   /**
    * Initialize Web Audio API context with high sample rate support.
-   * Uses MediaElementSource so we keep HTMLAudioElement for transport
-   * (seeking, Range requests) but route through AudioContext for proper
-   * Hi-Res decoding at native sample rate.
+   * IMPORTANT: createMediaElementSource() can only be called ONCE per
+   * audio element. We create the source node once and reuse it forever.
+   * If the sample rate changes we create a new AudioContext but reuse
+   * the existing sourceNode by reconnecting it.
    */
   function ensureAudioContext(sampleRate) {
-    // If existing context matches required sample rate, reuse it
-    if (playerState.audioContext && playerState.audioContext.state !== 'closed') {
-      if (!sampleRate || playerState.audioContext.sampleRate === sampleRate) {
-        return playerState.audioContext;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null; // Browser doesn't support Web Audio API
+
+    const needNewContext = !playerState.audioContext
+      || playerState.audioContext.state === 'closed'
+      || (sampleRate && sampleRate > 44100 && playerState.audioContext.sampleRate !== sampleRate);
+
+    if (needNewContext) {
+      // Close old context if exists
+      if (playerState.audioContext && playerState.audioContext.state !== 'closed') {
+        try {
+          playerState.gainNode?.disconnect();
+          // Do NOT disconnect sourceNode — we'll reconnect it to the new context
+          playerState.audioContext.close();
+        } catch (_) {}
       }
-      // Sample rate mismatch — close and recreate
-      try {
-        playerState.sourceNode?.disconnect();
-        playerState.gainNode?.disconnect();
-        playerState.audioContext.close();
-      } catch (_) {}
-      playerState.audioContext = null;
-      playerState.sourceNode = null;
       playerState.gainNode = null;
+      playerState.audioContext = null;
+
+      try {
+        const opts = sampleRate && sampleRate > 44100 ? { sampleRate } : {};
+        playerState.audioContext = new AudioCtx(opts);
+        console.log(`[player] AudioContext created: ${playerState.audioContext.sampleRate} Hz`);
+      } catch (err) {
+        console.warn('[player] Web Audio API AudioContext failed:', err.message);
+        return null;
+      }
     }
 
-    try {
-      const opts = {};
-      // Request high sample rate for Hi-Res content
-      if (sampleRate && sampleRate > 44100) {
-        opts.sampleRate = sampleRate;
+    // Create MediaElementSource only once — reuse on subsequent calls
+    if (!playerState.sourceNode) {
+      try {
+        playerState.sourceNode = playerState.audioContext.createMediaElementSource(P.audio);
+      } catch (err) {
+        // InvalidStateError = already created for this element; that's fine
+        // The node already exists in the old context — we can't reuse it across contexts
+        // In this case just skip Web Audio routing; HTMLAudioElement will handle it
+        console.warn('[player] createMediaElementSource failed:', err.message);
+        playerState.sourceNode = null;
+        return playerState.audioContext;
       }
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      playerState.audioContext = new AudioCtx(opts);
+    }
 
-      // Create source from audio element
-      playerState.sourceNode = playerState.audioContext.createMediaElementSource(P.audio);
-
-      // Create gain node for volume control through Web Audio pipeline
-      playerState.gainNode = playerState.audioContext.createGain();
-      playerState.gainNode.gain.value = parseFloat(P.volumeSlider.value);
-
-      // Connect: source → gain → destination
+    // (Re)create gain node and connect chain
+    try {
+      if (!playerState.gainNode) {
+        playerState.gainNode = playerState.audioContext.createGain();
+        playerState.gainNode.gain.value = parseFloat(P.volumeSlider.value);
+      }
       playerState.sourceNode.connect(playerState.gainNode);
       playerState.gainNode.connect(playerState.audioContext.destination);
-
-      console.log(`[player] AudioContext created: ${playerState.audioContext.sampleRate} Hz`);
     } catch (err) {
-      console.warn('[player] Web Audio API failed, using HTMLAudioElement fallback:', err.message);
-      playerState.audioContext = null;
+      console.warn('[player] Web Audio connect failed:', err.message);
     }
 
     return playerState.audioContext;
@@ -243,22 +257,33 @@
     playerState.audioInfo = audioInfo;
     playerState.hiRes = audioInfo?.hiRes || false;
 
-    if (audioInfo && audioInfo.hiRes) {
-      P.audioInfoEl.textContent = audioInfo.label || `${audioInfo.bitDepth}-bit / ${(audioInfo.sampleRate / 1000).toFixed(1)} kHz`;
-      P.hiresBadge.classList.remove('hidden');
-    } else if (audioInfo && audioInfo.label) {
-      // Show quality info even for non-Hi-Res (but without golden glow)
-      P.audioInfoEl.textContent = audioInfo.label;
-      P.hiresBadge.classList.remove('hidden');
+    if (!audioInfo || !audioInfo.label) {
+      P.hiresBadge.classList.add('hidden');
+      return;
+    }
+
+    // Update label text
+    P.audioInfoEl.textContent = audioInfo.label;
+
+    if (audioInfo.hiRes) {
+      // Gold Hi-Res styling
+      P.hiresBadge.style.cssText = '';
+      const icon = P.hiresBadge.querySelector('.hires-icon');
+      if (icon) { icon.style.cssText = ''; icon.textContent = 'HR'; }
+    } else {
+      // Neutral CD Quality styling
       P.hiresBadge.style.background = 'rgba(255,255,255,.06)';
       P.hiresBadge.style.borderColor = 'rgba(255,255,255,.15)';
       P.hiresBadge.style.animation = 'none';
-      P.hiresBadge.querySelector('.hires-icon').style.background = 'rgba(255,255,255,.2)';
-      P.hiresBadge.querySelector('.hires-icon').style.color = 'var(--text-2)';
-      P.hiresBadge.querySelector('.hires-icon').textContent = 'CD';
-    } else {
-      P.hiresBadge.classList.add('hidden');
+      const icon = P.hiresBadge.querySelector('.hires-icon');
+      if (icon) {
+        icon.style.background = 'rgba(255,255,255,.2)';
+        icon.style.color = 'var(--text-2)';
+        icon.textContent = 'CD';
+      }
     }
+
+    P.hiresBadge.classList.remove('hidden');
   }
 
   function resetHiResBadge() {
@@ -340,6 +365,9 @@
     }
 
     // Detect Hi-Res: fetch audio info then set up Web Audio API
+    // Keep a reference to this playback session so we don't update badge
+    // for a stale/cancelled request if the user switches tracks quickly.
+    const sessionUrl = item.streamUrl;
     const setupHiRes = async () => {
       let audioInfo = null;
 
@@ -350,22 +378,25 @@
         // Streaming — use expected quality from provider
         audioInfo = await fetchStreamAudioInfo(item._provider, item._quality);
       } else if (item.streamUrl.includes('proxy-stream')) {
-        // Proxy stream from Qobuz — detect from provider quality
-        audioInfo = await fetchStreamAudioInfo('qobuz', item._quality || '6');
+        // Proxy stream from Qobuz — use quality tag passed in item
+        audioInfo = await fetchStreamAudioInfo('qobuz', item._quality || '27');
+      }
+
+      // Bail out if user already switched to another track
+      if (P.audio.src !== sessionUrl && !P.audio.src.endsWith(encodeURIComponent(item.fileName || ''))) {
+        return;
       }
 
       if (audioInfo) {
         updateHiResBadge(audioInfo);
-
         // Set up Web Audio Context with appropriate sample rate for Hi-Res
         if (audioInfo.hiRes && audioInfo.sampleRate > 44100) {
           ensureAudioContext(audioInfo.sampleRate);
-          showBuffering(true); // Hi-Res files are large, show buffering
         } else if (!playerState.audioContext) {
-          ensureAudioContext(); // Standard sample rate
+          ensureAudioContext();
         }
       } else if (!playerState.audioContext) {
-        ensureAudioContext(); // Fallback: standard context
+        ensureAudioContext();
       }
     };
 
