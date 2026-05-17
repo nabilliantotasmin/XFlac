@@ -992,20 +992,32 @@ const server = http.createServer(async (req, res) => {
 
 
     // ─── LYRICS ──────────────────────────────────────────────────────────────────
-    // GET /api/lyrics?title=&artist=&album=&duration=&isrc=
+    // GET /api/lyrics?title=&artist=&album=&duration=&isrc=&providers=
     //
     // Fetches lyrics from multiple providers (Apple, Musixmatch, LRCLIB, Genius,
     // NetEase, LyricsOvh, Amazon). Returns { lyrics, provider, synced }.
     // "synced" is true when the lyrics contain LRC timestamps [mm:ss.cs].
+    // 
+    // The "providers" parameter controls which providers to use and their order.
+    // If fallback is disabled in settings, only the primary provider will be sent.
     if (p === '/api/lyrics' && m === 'GET') {
       const title    = parsed.searchParams.get('title')    || '';
       const artist   = parsed.searchParams.get('artist')   || '';
       const album    = parsed.searchParams.get('album')    || '';
       const duration = parseFloat(parsed.searchParams.get('duration') || '0');
       const isrc     = parsed.searchParams.get('isrc')     || '';
+      const providersCsv = parsed.searchParams.get('providers') || '';
 
       if (!title || !artist) return json(res, { error: 'Missing title or artist' }, 400);
       if (!fetchLyricsFromEngine) return json(res, { lyrics: '', provider: '', synced: false });
+
+      // Parse providers from request, fallback to default if not provided
+      const defaultProviders = ['spotify', 'apple', 'musixmatch', 'lrclib', 'genius', 'netease', 'lyricsovh', 'amazon'];
+      const providers = providersCsv 
+        ? providersCsv.split(',').map(s => s.trim()).filter(Boolean)
+        : defaultProviders;
+
+      console.log(`[lyrics] Using providers: ${providers.join(', ')}`);
 
       try {
         const { lyrics, provider } = await fetchLyricsFromEngine({
@@ -1014,7 +1026,7 @@ const server = http.createServer(async (req, res) => {
           albumName:  album,
           durationS:  duration,
           isrc,
-          providers: ['apple', 'musixmatch', 'lrclib', 'genius', 'netease', 'lyricsovh', 'amazon']
+          providers
         });
 
         // Detect if lyrics are LRC-synced (contain timestamp tags)
