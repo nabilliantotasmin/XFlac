@@ -114,22 +114,25 @@ class QobuzProvider {
    * Reorder APIs based on priority list
    * @param {Array} apis - Array of API resolver objects
    * @param {string[]} priority - Priority order array
-   * @returns {Array} Reordered APIs array
+   * @returns {Array} Reordered APIs array - ONLY includes resolvers in priority list
    */
   _reorderApis(apis, priority) {
     const apiMap = new Map(apis.map(api => [api.name, api]));
     const reordered = [];
     
-    // Add APIs in priority order
+    // Add ONLY APIs that are in the priority list, in order
+    // This respects the "fallback off" setting - if only 1 resolver is in priority,
+    // only that resolver will be tried
     for (const name of priority) {
       if (apiMap.has(name)) {
         reordered.push(apiMap.get(name));
-        apiMap.delete(name);
       }
     }
     
-    // Add remaining APIs not in priority list
-    reordered.push(...apiMap.values());
+    // If no valid resolvers found in priority list, fall back to all APIs
+    if (reordered.length === 0) {
+      return apis;
+    }
     
     return reordered;
   }
@@ -172,6 +175,9 @@ class QobuzProvider {
     const apis = this.resolverPriority 
       ? this._reorderApis(QOBUZ_STREAM_APIS, this.resolverPriority)
       : QOBUZ_STREAM_APIS;
+
+    console.log(`[qobuz] Resolver priority: ${this.resolverPriority ? this.resolverPriority.join(', ') : 'default (all)'}`);
+    console.log(`[qobuz] Will try ${apis.length} resolver(s): ${apis.map(a => a.name).join(', ')}`);
 
     for (const api of apis) {
       try {
