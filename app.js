@@ -97,6 +97,7 @@
     audioInfoEl:    $('player-audio-info'),
     bufferingEl:    $('player-buffering'),
     downloadBtn:    $('player-download'),
+    lyricsCloseBtn: $('player-lyrics-close'),
     progressBar:    $('player-progress-bar'),
     progressFill:   $('player-progress-fill'),
     progressThumb:  $('player-progress-thumb'),
@@ -128,7 +129,7 @@
   };
 
   function initPlayer() {
-    P.artworkWrap = P.artwork?.parentElement;
+    P.artworkWrap = document.getElementById('player-artwork-wrap');
     P.closeBtn.addEventListener('click', minimisePlayer);
     P.mini.addEventListener('click', e => { if (!e.target.closest('.mini-btn')) openPlayerModal(); });
     P.miniPlayPause.addEventListener('click', e => { e.stopPropagation(); togglePlayPause(); });
@@ -160,16 +161,18 @@
     document.addEventListener('touchend',   progressDragEnd);
     P.audio.addEventListener('timeupdate',     onTimeUpdate);
     P.audio.addEventListener('loadedmetadata', onMetadataLoaded);
-    P.audio.addEventListener('play',  () => setPlayingVisuals(true));
-    P.audio.addEventListener('pause', () => setPlayingVisuals(false));
+    P.audio.addEventListener('play',  () => { setPlayingVisuals(true);  startSpectrumDraw(); });
+    P.audio.addEventListener('pause', () => { setPlayingVisuals(false); stopSpectrumDraw();  });
     P.audio.addEventListener('ended', onEnded);
     P.audio.addEventListener('error', onAudioError);
     P.audio.addEventListener('waiting',  () => showBuffering(true));
     P.audio.addEventListener('canplay',  () => showBuffering(false));
-    P.audio.addEventListener('playing',  () => showBuffering(false));
+    P.audio.addEventListener('playing',  () => { showBuffering(false); startSpectrumDraw(); });
     P.audio.addEventListener('stalled',  () => { if (playerState.hiRes) showBuffering(true); });
     P.lyricsToggle.addEventListener('click', toggleLyricsPanel);
+    P.lyricsCloseBtn?.addEventListener('click', toggleLyricsPanel);
     document.addEventListener('keydown', onPlayerKeydown);
+    initSpectrum();
   }
 
   /**
@@ -343,6 +346,8 @@
     playerState.playing = false;
     setPlayingVisuals(false);
     resetHiResBadge();
+    resetAudioInfoPanel();
+    stopSpectrumDraw();
     showBuffering(false);
   }
 
@@ -358,15 +363,28 @@
     playerState.track = item;
     _applyTrackMeta(item);
     resetHiResBadge();
+    resetAudioInfoPanel();
+    stopSpectrumDraw();
     showBuffering(false);
     if (item.downloadUrl) {
       P.downloadBtn.href = item.downloadUrl;
       P.downloadBtn.setAttribute('download', item.fileName || 'track');
     }
 
-    // Detect Hi-Res: fetch audio info then set up Web Audio API
-    // Keep a reference to this playback session so we don't update badge
-    // for a stale/cancelled request if the user switches tracks quickly.
+    // ── Step 1: Ensure AudioContext exists BEFORE play so the analyser
+    //   is ready when the 'play' event fires and startSpectrumDraw() runs.
+    //   For streaming tracks we don't know the sample rate yet, so we
+    //   initialise with the default (44100) and upgrade later if Hi-Res.
+    if (!playerState.audioContext || playerState.audioContext.state === 'closed') {
+      ensureAudioContext();
+    } else if (playerState.audioContext.state === 'suspended') {
+      playerState.audioContext.resume();
+    }
+    // Connect analyser immediately so spectrum works from the first frame
+    connectAnalyser();
+
+    // ── Step 2: Fetch audio info async (badge + info panel + possible Hi-Res
+    //   context upgrade). Keep a session reference so stale responses are ignored.
     const sessionUrl = item.streamUrl;
     const setupHiRes = async () => {
       let audioInfo = null;
@@ -389,21 +407,42 @@
 
       if (audioInfo) {
         updateHiResBadge(audioInfo);
-        // Set up Web Audio Context with appropriate sample rate for Hi-Res
+        // Populate audio info panel with basic info immediately
+        populateAudioInfoFromBasic(audioInfo);
+        // Upgrade Web Audio Context sample rate for Hi-Res if needed
         if (audioInfo.hiRes && audioInfo.sampleRate > 44100) {
           ensureAudioContext(audioInfo.sampleRate);
-        } else if (!playerState.audioContext) {
-          ensureAudioContext();
+          // Re-connect analyser after context upgrade
+          connectAnalyser();
         }
-      } else if (!playerState.audioContext) {
-        ensureAudioContext();
+      } else if (!item.fileName) {
+        // Streaming track with no provider/quality info — populate panel
+        // from the live AudioContext sample rate once audio starts playing
+        const fillFromContext = () => {
+          const ctx = playerState.audioContext;
+          if (!ctx) return;
+          const sr = ctx.sampleRate || 44100;
+          populateAudioInfoFromBasic({
+            format: (item.streamUrl.includes('.flac') || item.streamUrl.includes('proxy-stream')) ? 'flac' : 'stream',
+            sampleRate: sr,
+            bitDepth: 16,
+            channels: 2,
+            hiRes: sr > 44100,
+            label: `${(sr / 1000).toFixed(sr % 1000 === 0 ? 0 : 1)} kHz`
+          });
+        };
+        if (P.audio.readyState >= 1) {
+          fillFromContext();
+        } else {
+          P.audio.addEventListener('loadedmetadata', fillFromContext, { once: true });
+        }
+      }
+
+      // If local file, also fetch full metadata for the info panel
+      if (item.fileName) {
+        await fetchAndPopulateFullAudioInfo(item.fileName);
       }
     };
-
-    // Resume AudioContext if suspended (browser autoplay policy)
-    if (playerState.audioContext?.state === 'suspended') {
-      playerState.audioContext.resume();
-    }
 
     P.audio.src = item.streamUrl;
     P.audio.load();
@@ -413,6 +452,7 @@
     playerState.lyricsData = null;
     playerState.lyricsActiveIdx = -1;
     P.lyricsLines.innerHTML = '';
+    P.lyricsBody.scrollTop = 0;
     hide(P.lyricsNoAvail);
     hide(P.lyricsLoading);
     fetchAndRenderLyrics(item);
@@ -683,7 +723,11 @@
     if (activeEl) {
       const bR = P.lyricsBody.getBoundingClientRect();
       const eR = activeEl.getBoundingClientRect();
-      P.lyricsBody.scrollBy({ top: eR.top - bR.top - bR.height / 2 + eR.height / 2, behavior: 'smooth' });
+      // Target: place active line at 35% from top of panel (not dead center),
+      // but clamp so we never scroll above the top (no blank space at start).
+      const targetOffset = bR.height * 0.35;
+      const delta = eR.top - bR.top - targetOffset + eR.height / 2;
+      P.lyricsBody.scrollBy({ top: delta, behavior: 'smooth' });
     }
   }
 
@@ -693,10 +737,302 @@
   }
 
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SPECTRUM ANALYZER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VINYL SPECTRUM ANALYZER
+  // Circular spectrum bars radiating outward from the vinyl disc edge.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const spectrum = {
+    canvas:      null,
+    ctx:         null,
+    analyser:    null,
+    dataArray:   null,
+    rafId:       null,
+    fftSize:     2048,
+    active:      false,
+  };
+
+  function initSpectrum() {
+    spectrum.canvas = document.getElementById('vinyl-spectrum-canvas');
+    if (!spectrum.canvas) return;
+    spectrum.ctx = spectrum.canvas.getContext('2d');
+
+    // Keep canvas pixel size in sync with its CSS size
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(() => {
+        _resizeVinylCanvas();
+        if (!spectrum.active) drawIdleSpectrum();
+      }).observe(spectrum.canvas.parentElement);
+    }
+
+    // Audio info panel collapse toggle
+    const panel = document.getElementById('audio-info-panel');
+    if (panel) {
+      panel.querySelector('.audio-info-header')?.addEventListener('click', () => {
+        panel.classList.toggle('collapsed');
+      });
+    }
+
+    drawIdleSpectrum();
+  }
+
+  function connectAnalyser() {
+    const ctx = playerState.audioContext;
+    if (!ctx || !playerState.sourceNode) return;
+
+    if (spectrum.analyser) {
+      try { spectrum.analyser.disconnect(); } catch (_) {}
+    }
+
+    spectrum.analyser = ctx.createAnalyser();
+    spectrum.analyser.fftSize = spectrum.fftSize;
+    spectrum.analyser.smoothingTimeConstant = 0.82;
+    spectrum.analyser.minDecibels = -90;
+    spectrum.analyser.maxDecibels = -10;
+    spectrum.dataArray = new Uint8Array(spectrum.analyser.frequencyBinCount);
+
+    try {
+      playerState.gainNode.connect(spectrum.analyser);
+    } catch (_) {
+      try { playerState.sourceNode.connect(spectrum.analyser); } catch (_2) {}
+    }
+  }
+
+  function startSpectrumDraw() {
+    spectrum.active = true;
+    cancelAnimationFrame(spectrum.rafId);
+    drawSpectrum();
+  }
+
+  function stopSpectrumDraw() {
+    spectrum.active = false;
+    cancelAnimationFrame(spectrum.rafId);
+    drawIdleSpectrum();
+  }
+
+  function _resizeVinylCanvas() {
+    const canvas = spectrum.canvas;
+    if (!canvas) return;
+    const wrap = canvas.parentElement;
+    if (!wrap) return;
+    const size = wrap.offsetWidth || 340;
+    if (canvas.width !== size || canvas.height !== size) {
+      canvas.width  = size;
+      canvas.height = size;
+    }
+  }
+
+  function drawIdleSpectrum() {
+    if (!spectrum.ctx || !spectrum.canvas) return;
+    _resizeVinylCanvas();
+    const { ctx, canvas } = spectrum;
+    const S = canvas.width;
+    ctx.clearRect(0, 0, S, S);
+
+    // Draw a faint idle ring at the disc edge
+    const cx = S / 2, cy = S / 2;
+    const discR = S * 0.36;   // matches 72% disc / 2
+    const barMaxH = S * 0.14;
+    const NUM_BARS = 180;
+
+    for (let i = 0; i < NUM_BARS; i++) {
+      const angle = (i / NUM_BARS) * Math.PI * 2 - Math.PI / 2;
+      const idleH = S * 0.008;
+      const x1 = cx + Math.cos(angle) * (discR + 4);
+      const y1 = cy + Math.sin(angle) * (discR + 4);
+      const x2 = cx + Math.cos(angle) * (discR + 4 + idleH);
+      const y2 = cy + Math.sin(angle) * (discR + 4 + idleH);
+      ctx.strokeStyle = 'rgba(108,92,231,0.18)';
+      ctx.lineWidth = Math.max(1, (S * 0.006));
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  }
+
+  function drawSpectrum() {
+    if (!spectrum.active) return;
+    spectrum.rafId = requestAnimationFrame(drawSpectrum);
+
+    const { ctx, canvas, analyser, dataArray } = spectrum;
+    if (!ctx || !canvas || !analyser || !dataArray) return;
+
+    _resizeVinylCanvas();
+    const S = canvas.width;
+    const cx = S / 2, cy = S / 2;
+
+    // disc radius = 72% of wrap / 2, with a small gap before bars start
+    const discR  = S * 0.36;
+    const gap    = S * 0.015;
+    const barMaxH = S * 0.14;   // max bar height (outward)
+    const NUM_BARS = 180;
+
+    analyser.getByteFrequencyData(dataArray);
+    ctx.clearRect(0, 0, S, S);
+
+    // Map NUM_BARS logarithmically across frequency bins
+    const binCount = analyser.frequencyBinCount;
+    const nyquist  = (playerState.audioContext?.sampleRate || 44100) / 2;
+    const logMin   = Math.log10(20);
+    const logMax   = Math.log10(Math.min(nyquist, 20000));
+
+    for (let i = 0; i < NUM_BARS; i++) {
+      const angle = (i / NUM_BARS) * Math.PI * 2 - Math.PI / 2;
+
+      // Log-frequency bin mapping
+      const logFreq = logMin + (i / NUM_BARS) * (logMax - logMin);
+      const freq    = Math.pow(10, logFreq);
+      const bin     = Math.min(Math.round((freq / nyquist) * binCount), binCount - 1);
+      const val     = dataArray[bin] / 255;
+
+      const barH = val * barMaxH;
+      const r1   = discR + gap;
+      const r2   = discR + gap + Math.max(barH, S * 0.004); // min visible nub
+
+      const x1 = cx + Math.cos(angle) * r1;
+      const y1 = cy + Math.sin(angle) * r1;
+      const x2 = cx + Math.cos(angle) * r2;
+      const y2 = cy + Math.sin(angle) * r2;
+
+      // Colour: purple → cyan based on frequency position
+      const t = i / NUM_BARS;
+      const cr = Math.round(108 + (0   - 108) * t);
+      const cg = Math.round(92  + (206 - 92)  * t);
+      const cb = Math.round(231 + (201 - 231) * t);
+      const alpha = 0.35 + val * 0.65;
+
+      ctx.strokeStyle = `rgba(${cr},${cg},${cb},${alpha})`;
+      ctx.lineWidth   = Math.max(1.5, S * 0.006);
+      ctx.lineCap     = 'round';
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+      // Bright tip glow on loud bars
+      if (val > 0.55) {
+        ctx.strokeStyle = `rgba(${cr},${cg},${cb},${(val - 0.55) * 1.8})`;
+        ctx.lineWidth   = Math.max(1, S * 0.003);
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(cx + Math.cos(angle) * (r2 + S * 0.018), cy + Math.sin(angle) * (r2 + S * 0.018));
+        ctx.stroke();
+      }
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // AUDIO FILE INFORMATION PANEL
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const aiEl = {
+    type:      () => document.getElementById('ai-type'),
+    samplerate:() => document.getElementById('ai-samplerate'),
+    bitdepth:  () => document.getElementById('ai-bitdepth'),
+    channels:  () => document.getElementById('ai-channels'),
+    duration:  () => document.getElementById('ai-duration'),
+    nyquist:   () => document.getElementById('ai-nyquist'),
+    size:      () => document.getElementById('ai-size'),
+    samples:   () => document.getElementById('ai-samples'),
+    frames:    () => document.getElementById('ai-frames'),
+    fftsize:   () => document.getElementById('ai-fftsize'),
+    freqres:   () => document.getElementById('ai-freqres'),
+  };
+
+  function resetAudioInfoPanel() {
+    Object.values(aiEl).forEach(fn => {
+      const el = fn();
+      if (el) { el.textContent = '—'; el.classList.remove('hi-res'); }
+    });
+  }
+
+  function populateAudioInfoFromBasic(info) {
+    // Called immediately with basic info (from /api/audio-info or stream-audio-info)
+    // while full info is being fetched
+    if (!info) return;
+    _setAI('type',       info.format ? info.format.toUpperCase() : 'Unknown');
+    _setAI('samplerate', info.sampleRate ? `${(info.sampleRate / 1000).toFixed(info.sampleRate % 1000 === 0 ? 0 : 1)} kHz` : 'Unknown');
+    _setAI('bitdepth',   info.bitDepth  ? `${info.bitDepth}-bit` : 'Unknown');
+    _setAI('channels',   info.channels  ? _chLabel(info.channels) : 'Unknown');
+    _setAI('nyquist',    info.sampleRate ? `${(info.sampleRate / 2 / 1000).toFixed(info.sampleRate / 2 % 1000 === 0 ? 0 : 1)} kHz` : 'Unknown');
+    _setAI('fftsize',    `${spectrum.fftSize}`);
+    _setAI('freqres',    info.sampleRate ? `${(info.sampleRate / spectrum.fftSize).toFixed(2)} Hz` : 'Unknown');
+
+    if (info.hiRes) {
+      aiEl.bitdepth()?.classList.add('hi-res');
+      aiEl.samplerate()?.classList.add('hi-res');
+    }
+  }
+
+  function populateAudioInfoFull(info) {
+    if (!info || info.error) return;
+    _setAI('type',       info.type || 'Unknown');
+    _setAI('samplerate', info.sampleRate ? `${(info.sampleRate / 1000).toFixed(info.sampleRate % 1000 === 0 ? 0 : 1)} kHz` : 'Unknown');
+    _setAI('bitdepth',   info.bitDepth   ? `${info.bitDepth}-bit` : 'Unknown');
+    _setAI('channels',   info.channels   ? _chLabel(info.channels) : 'Unknown');
+    _setAI('duration',   info.durationSec != null ? _fmtDurFull(info.durationSec) : 'Unknown');
+    _setAI('nyquist',    info.nyquist    ? `${(info.nyquist / 1000).toFixed(info.nyquist % 1000 === 0 ? 0 : 1)} kHz` : 'Unknown');
+    _setAI('size',       info.fileSizeBytes ? fmtBytes(info.fileSizeBytes) : 'Unknown');
+    _setAI('samples',    info.totalSamples  != null ? _fmtBig(info.totalSamples) : 'Unknown');
+    _setAI('frames',     info.analysisFrames != null ? _fmtBig(info.analysisFrames) : 'Unknown');
+    _setAI('fftsize',    `${info.fftSize || spectrum.fftSize}`);
+    _setAI('freqres',    info.freqResolution != null ? `${info.freqResolution.toFixed(2)} Hz` : 'Unknown');
+
+    if (info.hiRes) {
+      aiEl.bitdepth()?.classList.add('hi-res');
+      aiEl.samplerate()?.classList.add('hi-res');
+    }
+  }
+
+  function _setAI(key, val) {
+    const el = aiEl[key]?.();
+    if (el) el.textContent = val;
+  }
+
+  function _chLabel(n) {
+    if (n === 1) return '1 (Mono)';
+    if (n === 2) return '2 (Stereo)';
+    if (n === 6) return '6 (5.1)';
+    if (n === 8) return '8 (7.1)';
+    return String(n);
+  }
+
+  function _fmtDurFull(sec) {
+    if (!sec || !isFinite(sec)) return 'Unknown';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
+  }
+
+  function _fmtBig(n) {
+    if (n == null) return 'Unknown';
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  async function fetchAndPopulateFullAudioInfo(fileName) {
+    try {
+      const r = await fetch(`/api/audio-info-full?file=${encodeURIComponent(fileName)}`);
+      const info = await r.json();
+      if (!info.error) populateAudioInfoFull(info);
+    } catch (_) {}
+  }
+
   // ─── INIT ─────────────────────────────────────────────────────────────────
   async function init() {
     await Promise.all([loadProviders(), loadLibrary(false)]);
     initPlayer();
+    initSettings();
     bindEvents();
   }
 
@@ -1221,7 +1557,7 @@
         <a class="lib-save" href="${t.downloadUrl}" download="${esc(t.fileName)}" title="Save"><i class="fas fa-download"></i></a>`;
       row.querySelector('.lib-play').addEventListener('click', () =>
         playInPlayer({ title: t.title || t.fileName, artist: t.artist || 'Unknown', album: '',
-          streamUrl: t.streamUrl, downloadUrl: t.downloadUrl, fileName: t.fileName })
+          cover: t.coverUrl || '', streamUrl: t.streamUrl, downloadUrl: t.downloadUrl, fileName: t.fileName })
       );
       el.libraryList.appendChild(row);
     });
@@ -1258,6 +1594,108 @@
   function fuzzyTitle(s) {
     return String(s || '').toLowerCase().trim()
       .replace(/\s*\(feat\..*?\)/gi, '').replace(/\s*\[.*?\]/gi, '').trim();
+  }
+
+  // ─── SETTINGS ─────────────────────────────────────────────────────────────
+  const settingsEl = {
+    modal:          $('settings-modal'),
+    openBtn:        $('settings-btn'),
+    closeBtn:       $('settings-close'),
+    navItems:       null,
+    providerSelect: $('lyrics-provider-select'),
+    fallbackToggle: $('lyrics-fallback-toggle'),
+    saveBtn:        $('settings-save-btn'),
+    saveStatus:     $('settings-save-status'),
+  };
+
+  function initSettings() {
+    settingsEl.navItems = document.querySelectorAll('.settings-nav-item');
+
+    settingsEl.openBtn?.addEventListener('click', openSettings);
+    settingsEl.closeBtn?.addEventListener('click', closeSettings);
+    settingsEl.modal?.addEventListener('click', e => {
+      if (e.target === settingsEl.modal) closeSettings();
+    });
+
+    // Nav tab switching
+    settingsEl.navItems?.forEach(btn => {
+      btn.addEventListener('click', () => {
+        settingsEl.navItems.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.settings-section').forEach(s => hide(s));
+        const target = $(`settings-section-${btn.dataset.section}`);
+        if (target) show(target);
+      });
+    });
+
+    // Fallback toggle
+    settingsEl.fallbackToggle?.addEventListener('click', () => {
+      const isOn = settingsEl.fallbackToggle.getAttribute('aria-checked') === 'true';
+      settingsEl.fallbackToggle.setAttribute('aria-checked', String(!isOn));
+    });
+
+    // Save
+    settingsEl.saveBtn?.addEventListener('click', saveSettings);
+
+    // Load current settings on init
+    loadSettingsFromServer();
+  }
+
+  async function openSettings() {
+    await loadSettingsFromServer();
+    settingsEl.modal?.classList.remove('hidden');
+  }
+
+  function closeSettings() {
+    settingsEl.modal?.classList.add('hidden');
+    hideSaveStatus();
+  }
+
+  async function loadSettingsFromServer() {
+    try {
+      const r = await fetch('/api/settings');
+      const data = await r.json();
+      const lyrics = data.lyrics || {};
+      if (settingsEl.providerSelect && lyrics.provider) {
+        settingsEl.providerSelect.value = lyrics.provider;
+      }
+      if (settingsEl.fallbackToggle) {
+        const fallbackOn = lyrics.fallback !== false;
+        settingsEl.fallbackToggle.setAttribute('aria-checked', String(fallbackOn));
+      }
+    } catch (e) {
+      console.warn('[settings] Failed to load settings:', e.message);
+    }
+  }
+
+  async function saveSettings() {
+    const provider = settingsEl.providerSelect?.value || 'apple';
+    const fallback = settingsEl.fallbackToggle?.getAttribute('aria-checked') === 'true';
+
+    try {
+      const r = await fetch('/api/settings/lyrics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, fallback })
+      });
+      const data = await r.json();
+      if (data.error) throw new Error(data.error);
+      showSaveStatus('Tersimpan!', false);
+    } catch (e) {
+      showSaveStatus(`Gagal: ${e.message}`, true);
+    }
+  }
+
+  function showSaveStatus(msg, isError) {
+    if (!settingsEl.saveStatus) return;
+    settingsEl.saveStatus.textContent = msg;
+    settingsEl.saveStatus.classList.toggle('error', isError);
+    settingsEl.saveStatus.classList.add('visible');
+    setTimeout(hideSaveStatus, 3000);
+  }
+
+  function hideSaveStatus() {
+    settingsEl.saveStatus?.classList.remove('visible');
   }
 
   // ─── BOOT ─────────────────────────────────────────────────────────────────
