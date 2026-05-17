@@ -20,7 +20,7 @@
   
   const DEFAULT_SETTINGS = {
     lyrics: {
-      primary: 'spotify',
+      primary: 'lrclib',
       fallback: true
     },
     metadata: {
@@ -171,7 +171,7 @@
       // Lyrics tab
       const lyricsPrimary = $('lyrics-primary');
       const lyricsFallback = $('lyrics-fallback');
-      if (lyricsPrimary) lyricsPrimary.value = this.get('lyrics', 'primary') || 'spotify';
+      if (lyricsPrimary) lyricsPrimary.value = this.get('lyrics', 'primary') || 'lrclib';
       if (lyricsFallback) lyricsFallback.checked = this.get('lyrics', 'fallback') !== false;
 
       // Metadata tab
@@ -233,10 +233,11 @@
 
     // Helper methods untuk digunakan oleh sistem lain
     getLyricsProviders() {
-      const primary = this.get('lyrics', 'primary') || 'spotify';
+      const primary = this.get('lyrics', 'primary') || 'lrclib';
       const fallback = this.get('lyrics', 'fallback') !== false;
       
-      const allProviders = ['spotify', 'apple', 'musixmatch', 'genius', 'netease', 'lrclib', 'lyricsovh', 'amazon'];
+      // Updated list to match new lyrics providers in lib/lyrics.js
+      const allProviders = ['lrclib', 'spotify', 'musixmatch', 'netease', 'genius', 'tekstowo', 'azlyrics'];
       
       if (!fallback) {
         return [primary];
@@ -262,7 +263,8 @@
       const primary = this.get('streaming', 'qobuzResolver') || 'zarz';
       const fallback = this.get('streaming', 'qobuzFallback') !== false;
       
-      const allResolvers = ['zarz', 'lucida', 'slavart', 'spotbye', 'musicdl'];
+      // Updated list to match all 10 resolvers in providers/qobuz.js
+      const allResolvers = ['zarz', 'lucida', 'slavart', 'squid', 'doubledouble', 'qqdl', 'musicdl', 'freemp3', 'spotbye', 'orion'];
       
       if (!fallback) {
         return [primary];
