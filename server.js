@@ -863,10 +863,33 @@ const server = http.createServer(async (req, res) => {
 
       jobs.set(jobId, { status: 'pending', progress: 0, filePath: outName + ".tmp", error: null });
 
-      provObj.download(track, quality, outPath, (pct) => {
-        const job = jobs.get(jobId);
-        if (job) job.progress = Math.min(pct, 99);
-      }).then(async (finalPath) => {
+      // For Qobuz, set resolver priority based on settings
+      if (provider === 'qobuz' && settings?.streaming) {
+        const qobuzFallback = settings.streaming.qobuzFallback !== false;
+        const qobuzResolver = settings.streaming.qobuzResolver || 'zarz';
+        
+        if (qobuzFallback) {
+          // Fallback enabled: set priority with primary first, then others
+          const allResolvers = ['zarz', 'lucida', 'slavart', 'spotbye', 'musicdl'];
+          const priority = [qobuzResolver, ...allResolvers.filter(r => r !== qobuzResolver)];
+          provObj.setResolverPriority(priority);
+        } else {
+          // Fallback disabled: only use primary resolver
+          provObj.setResolverPriority([qobuzResolver]);
+        }
+      }
+
+      const downloadPromise = provider === 'qobuz' && settings?.streaming
+        ? provObj.download(track, quality, outPath, (pct) => {
+            const job = jobs.get(jobId);
+            if (job) job.progress = Math.min(pct, 99);
+          }, true) // limitToSetPriority = true since we just set the priority
+        : provObj.download(track, quality, outPath, (pct) => {
+            const job = jobs.get(jobId);
+            if (job) job.progress = Math.min(pct, 99);
+          });
+
+      downloadPromise.then(async (finalPath) => {
         const job = jobs.get(jobId);
         if (job) {
           const actualPath = finalPath || outPath;
@@ -928,6 +951,23 @@ const server = http.createServer(async (req, res) => {
       (async () => {
         const batch = batches.get(batchId);
         batch.status = 'downloading';
+        
+        // For Qobuz, set resolver priority based on settings
+        if (provider === 'qobuz' && settings?.streaming) {
+          const qobuzFallback = settings.streaming.qobuzFallback !== false;
+          const qobuzResolver = settings.streaming.qobuzResolver || 'zarz';
+          
+          if (qobuzFallback) {
+            // Fallback enabled: set priority with primary first, then others
+            const allResolvers = ['zarz', 'lucida', 'slavart', 'spotbye', 'musicdl'];
+            const priority = [qobuzResolver, ...allResolvers.filter(r => r !== qobuzResolver)];
+            provObj.setResolverPriority(priority);
+          } else {
+            // Fallback disabled: only use primary resolver
+            provObj.setResolverPriority([qobuzResolver]);
+          }
+        }
+        
         for (let i = 0; i < batch.tracks.length; i++) {
           const t = batch.tracks[i];
           batch.currentTrack = t.title;
@@ -935,7 +975,11 @@ const server = http.createServer(async (req, res) => {
           try {
             const outName = `${sanitize(t.artist)} - ${sanitize(t.title)}`;
             const outPath = path.join(DL_DIR, outName + ".tmp");
-            const finalPath = await provObj.download(t, quality, outPath, (pct) => { t.progress = Math.min(pct, 99); });
+            
+            const finalPath = provider === 'qobuz' && settings?.streaming
+              ? await provObj.download(t, quality, outPath, (pct) => { t.progress = Math.min(pct, 99); }, true)
+              : await provObj.download(t, quality, outPath, (pct) => { t.progress = Math.min(pct, 99); });
+            
             const actualPath = finalPath || outPath;
             
             // Apply tags with settings from client
@@ -1165,7 +1209,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       try {
-        const result = await provObj.getStreamUrlOnly(trackId, quality);
+        // If resolvers were explicitly specified, limit to only those resolvers
+        const limitToSetPriority = !!resolversParam;
+        const result = await provObj.getStreamUrlOnly(trackId, quality, limitToSetPriority);
         const remoteUrl = typeof result === 'string' ? result : result.url || result.streamUrl;
         const encrypted = typeof result === 'string' ? false  : !!(result.encrypted || result.decryptionKey);
         const format    = typeof result === 'string' ? 'flac' : (result.format || result.codec || 'flac');
@@ -1219,7 +1265,9 @@ const server = http.createServer(async (req, res) => {
       }
 
       try {
-        const result = await provObj.getStreamUrlOnly(trackId, quality);
+        // If resolvers were explicitly specified, limit to only those resolvers
+        const limitToSetPriority = !!resolversParam;
+        const result = await provObj.getStreamUrlOnly(trackId, quality, limitToSetPriority);
 
         // Normalise result from all providers into a unified shape
         const remoteUrl = typeof result === 'string' ? result : result.url || result.streamUrl;
