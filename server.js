@@ -309,11 +309,11 @@ function getExpectedAudioInfo(provider, quality) {
   return provSpecs[quality] || provSpecs[Object.keys(provSpecs)[0]] || { format: 'unknown', bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: 'Unknown' };
 }
 
-async function applyTags(filePath, track) {
+async function applyTags(filePath, track, options = {}) {
   if (!tagFile) return;
   try {
     console.log(`[tagger] Applying metadata for: ${track.title}`);
-    await tagFile(filePath, track, (msg) => console.log(`[tagger] ${msg}`));
+    await tagFile(filePath, track, (msg) => console.log(`[tagger] ${msg}`), options);
     console.log(`[tagger] Success: ${path.basename(filePath)}`);
   } catch (err) {
     console.warn(`[tagger] Failed for ${path.basename(filePath)}: ${err.message}`);
@@ -849,7 +849,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/download' && m === 'POST') {
       const body = await parseBody(req);
-      const { provider, track, quality } = body;
+      const { provider, track, quality, settings } = body;
       const provObj = providers[provider];
 
       if (!provObj) return json(res, { error: 'Unknown provider' }, 400);
@@ -870,7 +870,19 @@ const server = http.createServer(async (req, res) => {
         const job = jobs.get(jobId);
         if (job) {
           const actualPath = finalPath || outPath;
-          await applyTags(actualPath, track);
+          
+          // Apply tags with settings from client
+          const tagOptions = {};
+          if (settings?.metadata) {
+            tagOptions.metadataSource = settings.metadata.primary;
+            tagOptions.metadataFallback = settings.metadata.fallback;
+            tagOptions.autoTag = settings.metadata.autoTag;
+          }
+          if (settings?.lyrics) {
+            tagOptions.lyricsProviders = settings.lyrics.providers;
+          }
+          
+          await applyTags(actualPath, track, tagOptions);
           job.status = 'completed';
           job.progress = 100;
           job.filePath = path.basename(actualPath);
@@ -899,7 +911,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/batch-download' && m === 'POST') {
       const body = await parseBody(req);
-      const { provider, tracks, quality } = body;
+      const { provider, tracks, quality, settings } = body;
       const provObj = providers[provider];
 
       if (!provObj) return json(res, { error: 'Unknown provider' }, 400);
@@ -925,7 +937,19 @@ const server = http.createServer(async (req, res) => {
             const outPath = path.join(DL_DIR, outName + ".tmp");
             const finalPath = await provObj.download(t, quality, outPath, (pct) => { t.progress = Math.min(pct, 99); });
             const actualPath = finalPath || outPath;
-            await applyTags(actualPath, t);
+            
+            // Apply tags with settings from client
+            const tagOptions = {};
+            if (settings?.metadata) {
+              tagOptions.metadataSource = settings.metadata.primary;
+              tagOptions.metadataFallback = settings.metadata.fallback;
+              tagOptions.autoTag = settings.metadata.autoTag;
+            }
+            if (settings?.lyrics) {
+              tagOptions.lyricsProviders = settings.lyrics.providers;
+            }
+            
+            await applyTags(actualPath, t, tagOptions);
             t.status = 'completed'; t.progress = 100;
             t.filePath = path.basename(actualPath);
             batch.completed++;
@@ -1104,7 +1128,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ─── UNIFIED STREAM URL ───────────────────────────────────────────────────
-    // GET /api/unified-stream-url?id=<trackId>&provider=qobuz&quality=6
+    // GET /api/unified-stream-url?id=<trackId>&provider=qobuz&quality=6&resolvers=zarz,lucida
     //
     // Mencoba stream langsung. Hanya Qobuz yang diprioritaskan untuk streaming.
     // Jika provider bukan Qobuz (atau tidak support stream), kembalikan error
@@ -1113,6 +1137,7 @@ const server = http.createServer(async (req, res) => {
       const provKey  = parsed.searchParams.get('provider');
       const trackId  = parsed.searchParams.get('id');
       const quality  = parsed.searchParams.get('quality') || '6';
+      const resolversParam = parsed.searchParams.get('resolvers') || '';
 
       if (!trackId) return json(res, { error: 'Missing id' }, 400);
       if (!provKey)  return json(res, { error: 'Missing provider' }, 400);
@@ -1130,6 +1155,14 @@ const server = http.createServer(async (req, res) => {
       if (!provObj) return json(res, { error: 'Provider not available' }, 400);
       if (typeof provObj.getStreamUrlOnly !== 'function')
         return json(res, { error: 'Provider does not support direct streaming' }, 400);
+
+      // Apply resolver priority if provided
+      if (resolversParam && provObj.setResolverPriority) {
+        const resolverPriority = resolversParam.split(',').map(r => r.trim()).filter(Boolean);
+        if (resolverPriority.length > 0) {
+          provObj.setResolverPriority(resolverPriority);
+        }
+      }
 
       try {
         const result = await provObj.getStreamUrlOnly(trackId, quality);
@@ -1159,7 +1192,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ─── STREAM URL RESOLVER ────────────────────────────────────────────────────
-    // GET /api/stream-url?provider=qobuz&id=123456789&quality=6
+    // GET /api/stream-url?provider=qobuz&id=123456789&quality=6&resolvers=zarz,lucida
     // Returns { streamUrl, proxyUrl, encrypted, format } — no file written to disk
     // Only providers that implement getStreamUrlOnly() support this endpoint.
     // Tidal, Deezer, and Amazon do NOT implement getStreamUrlOnly — they require
@@ -1168,6 +1201,7 @@ const server = http.createServer(async (req, res) => {
       const prov     = parsed.searchParams.get('provider');
       const trackId  = parsed.searchParams.get('id');
       const quality  = parsed.searchParams.get('quality') || '6';
+      const resolversParam = parsed.searchParams.get('resolvers') || '';
 
       if (!trackId) return json(res, { error: 'Missing id' }, 400);
 
@@ -1175,6 +1209,14 @@ const server = http.createServer(async (req, res) => {
       if (!provObj) return json(res, { error: 'Unknown provider' }, 400);
       if (typeof provObj.getStreamUrlOnly !== 'function')
         return json(res, { error: `Provider "${prov}" does not support direct streaming. Please download the track first.` }, 400);
+
+      // Apply resolver priority if provided (Qobuz only)
+      if (resolversParam && prov === 'qobuz' && provObj.setResolverPriority) {
+        const resolverPriority = resolversParam.split(',').map(r => r.trim()).filter(Boolean);
+        if (resolverPriority.length > 0) {
+          provObj.setResolverPriority(resolverPriority);
+        }
+      }
 
       try {
         const result = await provObj.getStreamUrlOnly(trackId, quality);
