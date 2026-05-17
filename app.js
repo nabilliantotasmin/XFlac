@@ -14,6 +14,269 @@
   let selectedQuality  = null;
   let completedDL      = null;
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SETTINGS MANAGER
+  // ═══════════════════════════════════════════════════════════════════════════
+  
+  const DEFAULT_SETTINGS = {
+    lyrics: {
+      primary: 'spotify',
+      fallback: true
+    },
+    metadata: {
+      primary: 'musicbrainz',
+      fallback: true,
+      autoTag: true
+    },
+    streaming: {
+      qobuzResolver: 'zarz',
+      qobuzFallback: true,
+      qobuzQuality: '6'
+    }
+  };
+
+  const SettingsManager = {
+    settings: null,
+
+    init() {
+      this.load();
+      this.bindEvents();
+    },
+
+    load() {
+      try {
+        const saved = localStorage.getItem('xenoflac_settings');
+        if (saved) {
+          this.settings = { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+          // Deep merge untuk nested objects
+          this.settings.lyrics = { ...DEFAULT_SETTINGS.lyrics, ...(JSON.parse(saved).lyrics || {}) };
+          this.settings.metadata = { ...DEFAULT_SETTINGS.metadata, ...(JSON.parse(saved).metadata || {}) };
+          this.settings.streaming = { ...DEFAULT_SETTINGS.streaming, ...(JSON.parse(saved).streaming || {}) };
+        } else {
+          this.settings = { ...DEFAULT_SETTINGS };
+        }
+      } catch (e) {
+        console.warn('[settings] Failed to load:', e);
+        this.settings = { ...DEFAULT_SETTINGS };
+      }
+      console.log('[settings] Loaded:', this.settings);
+    },
+
+    save() {
+      try {
+        localStorage.setItem('xenoflac_settings', JSON.stringify(this.settings));
+        console.log('[settings] Saved:', this.settings);
+        return true;
+      } catch (e) {
+        console.error('[settings] Failed to save:', e);
+        return false;
+      }
+    },
+
+    reset() {
+      this.settings = { ...DEFAULT_SETTINGS };
+      this.settings.lyrics = { ...DEFAULT_SETTINGS.lyrics };
+      this.settings.metadata = { ...DEFAULT_SETTINGS.metadata };
+      this.settings.streaming = { ...DEFAULT_SETTINGS.streaming };
+      this.save();
+      this.populateUI();
+      console.log('[settings] Reset to defaults');
+    },
+
+    get(category, key) {
+      return this.settings?.[category]?.[key];
+    },
+
+    set(category, key, value) {
+      if (!this.settings[category]) this.settings[category] = {};
+      this.settings[category][key] = value;
+    },
+
+    bindEvents() {
+      const settingsBtn = $('settings-btn');
+      const settingsModal = $('settings-modal');
+      const settingsClose = $('settings-close');
+      const settingsSave = $('settings-save');
+      const settingsReset = $('settings-reset');
+
+      if (!settingsBtn || !settingsModal) return;
+
+      // Open modal
+      settingsBtn.addEventListener('click', () => {
+        this.openModal();
+      });
+
+      // Close modal
+      settingsClose?.addEventListener('click', () => {
+        this.closeModal();
+      });
+
+      // Click outside to close
+      settingsModal.addEventListener('click', (e) => {
+        if (e.target === settingsModal) this.closeModal();
+      });
+
+      // Tab switching
+      const tabs = settingsModal.querySelectorAll('.settings-tab');
+      tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+          const targetTab = tab.dataset.tab;
+          this.switchTab(targetTab);
+        });
+      });
+
+      // Save button
+      settingsSave?.addEventListener('click', () => {
+        this.saveFromUI();
+      });
+
+      // Reset button
+      settingsReset?.addEventListener('click', () => {
+        if (confirm('Reset all settings to default? This cannot be undone.')) {
+          this.reset();
+        }
+      });
+    },
+
+    openModal() {
+      const modal = $('settings-modal');
+      if (!modal) return;
+      this.populateUI();
+      modal.classList.remove('hidden');
+    },
+
+    closeModal() {
+      const modal = $('settings-modal');
+      if (!modal) return;
+      modal.classList.add('hidden');
+    },
+
+    switchTab(tabName) {
+      // Update tab buttons
+      const tabs = document.querySelectorAll('.settings-tab');
+      tabs.forEach(t => {
+        if (t.dataset.tab === tabName) t.classList.add('active');
+        else t.classList.remove('active');
+      });
+
+      // Update tab content
+      const contents = document.querySelectorAll('.settings-tab-content');
+      contents.forEach(c => {
+        if (c.id === `tab-${tabName}`) c.classList.add('active');
+        else c.classList.remove('active');
+      });
+    },
+
+    populateUI() {
+      // Lyrics tab
+      const lyricsPrimary = $('lyrics-primary');
+      const lyricsFallback = $('lyrics-fallback');
+      if (lyricsPrimary) lyricsPrimary.value = this.get('lyrics', 'primary') || 'spotify';
+      if (lyricsFallback) lyricsFallback.checked = this.get('lyrics', 'fallback') !== false;
+
+      // Metadata tab
+      const metadataPrimary = $('metadata-primary');
+      const metadataFallback = $('metadata-fallback');
+      const metadataAutoTag = $('metadata-auto-tag');
+      if (metadataPrimary) metadataPrimary.value = this.get('metadata', 'primary') || 'musicbrainz';
+      if (metadataFallback) metadataFallback.checked = this.get('metadata', 'fallback') !== false;
+      if (metadataAutoTag) metadataAutoTag.checked = this.get('metadata', 'autoTag') !== false;
+
+      // Streaming tab
+      const qobuzResolver = $('qobuz-resolver');
+      const qobuzFallback = $('qobuz-fallback');
+      const qobuzQuality = $('qobuz-quality');
+      if (qobuzResolver) qobuzResolver.value = this.get('streaming', 'qobuzResolver') || 'zarz';
+      if (qobuzFallback) qobuzFallback.checked = this.get('streaming', 'qobuzFallback') !== false;
+      if (qobuzQuality) qobuzQuality.value = this.get('streaming', 'qobuzQuality') || '6';
+    },
+
+    saveFromUI() {
+      // Read from UI
+      const lyricsPrimary = $('lyrics-primary');
+      const lyricsFallback = $('lyrics-fallback');
+      const metadataPrimary = $('metadata-primary');
+      const metadataFallback = $('metadata-fallback');
+      const metadataAutoTag = $('metadata-auto-tag');
+      const qobuzResolver = $('qobuz-resolver');
+      const qobuzFallback = $('qobuz-fallback');
+      const qobuzQuality = $('qobuz-quality');
+
+      // Update settings object
+      if (lyricsPrimary) this.set('lyrics', 'primary', lyricsPrimary.value);
+      if (lyricsFallback) this.set('lyrics', 'fallback', lyricsFallback.checked);
+      if (metadataPrimary) this.set('metadata', 'primary', metadataPrimary.value);
+      if (metadataFallback) this.set('metadata', 'fallback', metadataFallback.checked);
+      if (metadataAutoTag) this.set('metadata', 'autoTag', metadataAutoTag.checked);
+      if (qobuzResolver) this.set('streaming', 'qobuzResolver', qobuzResolver.value);
+      if (qobuzFallback) this.set('streaming', 'qobuzFallback', qobuzFallback.checked);
+      if (qobuzQuality) this.set('streaming', 'qobuzQuality', qobuzQuality.value);
+
+      // Save to localStorage
+      if (this.save()) {
+        // Show success feedback
+        const saveBtn = $('settings-save');
+        if (saveBtn) {
+          const originalHTML = saveBtn.innerHTML;
+          saveBtn.innerHTML = '<i class="fas fa-check"></i> Saved!';
+          saveBtn.style.background = 'linear-gradient(135deg, #22c55e, #16a34a)';
+          setTimeout(() => {
+            saveBtn.innerHTML = originalHTML;
+            saveBtn.style.background = '';
+          }, 1500);
+        }
+        
+        // Close modal after short delay
+        setTimeout(() => this.closeModal(), 1600);
+      }
+    },
+
+    // Helper methods untuk digunakan oleh sistem lain
+    getLyricsProviders() {
+      const primary = this.get('lyrics', 'primary') || 'spotify';
+      const fallback = this.get('lyrics', 'fallback') !== false;
+      
+      const allProviders = ['spotify', 'apple', 'musixmatch', 'genius', 'netease', 'lrclib', 'lyricsovh', 'amazon'];
+      
+      if (!fallback) {
+        return [primary];
+      }
+      
+      // Primary first, then others
+      return [primary, ...allProviders.filter(p => p !== primary)];
+    },
+
+    getMetadataSource() {
+      return this.get('metadata', 'primary') || 'musicbrainz';
+    },
+
+    shouldUseMetadataFallback() {
+      return this.get('metadata', 'fallback') !== false;
+    },
+
+    shouldAutoTag() {
+      return this.get('metadata', 'autoTag') !== false;
+    },
+
+    getQobuzResolverPriority() {
+      const primary = this.get('streaming', 'qobuzResolver') || 'zarz';
+      const fallback = this.get('streaming', 'qobuzFallback') !== false;
+      
+      const allResolvers = ['zarz', 'lucida', 'slavart', 'spotbye', 'musicdl'];
+      
+      if (!fallback) {
+        return [primary];
+      }
+      
+      // Primary first, then others
+      return [primary, ...allResolvers.filter(r => r !== primary)];
+    },
+
+    getQobuzDefaultQuality() {
+      return this.get('streaming', 'qobuzQuality') || '6';
+    }
+  };
+
   // ─── DOM REFS ─────────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
   const el = {
@@ -69,6 +332,12 @@
     doneStep:            $('done-step'),
     playNowBtn:          $('play-now-btn'),
     saveFileLink:        $('save-file-link'),
+    // Settings
+    settingsBtn:         $('settings-btn'),
+    settingsModal:       $('settings-modal'),
+    settingsClose:       $('settings-close'),
+    settingsSave:        $('settings-save'),
+    settingsReset:       $('settings-reset'),
   };
 
 
@@ -574,12 +843,18 @@
     hide(P.lyricsNoAvail);
     P.lyricsLines.innerHTML = '';
     P.lyricsProvider.textContent = '';
+    
     try {
+      // Get lyrics providers priority from Settings
+      const providers = SettingsManager.getLyricsProviders();
+      console.log('[lyrics] Using provider priority:', providers);
+      
       const params = new URLSearchParams({
         title: track.title, artist: track.artist,
         album: track.album || '',
         duration: track.duration ? Math.round(track.duration / 1000) : 0,
         isrc: track.isrc || '',
+        providers: providers.join(',') // Send priority to server
       });
       const r    = await fetch(`/api/lyrics?${params}`);
       const data = await r.json();
@@ -695,6 +970,7 @@
 
   // ─── INIT ─────────────────────────────────────────────────────────────────
   async function init() {
+    SettingsManager.init(); // Initialize settings first
     await Promise.all([loadProviders(), loadLibrary(false)]);
     initPlayer();
     bindEvents();
