@@ -4,12 +4,10 @@ const crypto = require('crypto');
 
 // ===================================================================
 // QOBUZ STREAM APIs (full-duration, no preview)
-// Sources: github.com/spotbye/SpotiFLAC-Next, github.com/afkarxyz/SpotiFLAC-Next,
-//          github.com/zarzet/SpotiFLAC-Mobile, github.com/jelni/lucida-downloader,
-//          github.com/tywil04/slavartdl, github.com/ifauzeee/QBZ-Downloader
+// Sources: Various public music resolvers, updated May 2026
 // ===================================================================
 const QOBUZ_STREAM_APIS = [
-  // API #1 — zarz.moe: primary resolver, SpotiFLAC ecosystem (active 2025)
+  // API #1 — zarz.moe: primary resolver, SpotiFLAC ecosystem
   {
     name: 'zarz',
     method: 'POST',
@@ -22,7 +20,7 @@ const QOBUZ_STREAM_APIS = [
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'SpotiFLAC-Mobile/4.5.1' },
     extractUrl: (data) => data.download_url || data.url || data.link || data.data?.url || null
   },
-  // API #2 — lucida.to: public multi-platform music resolver (active 2025, github.com/jelni/lucida-downloader)
+  // API #2 — lucida.to: public multi-platform music resolver
   {
     name: 'lucida',
     method: 'POST',
@@ -34,30 +32,56 @@ const QOBUZ_STREAM_APIS = [
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
     extractUrl: (data) => data.url || data.download_url || data.stream_url || null
   },
-  // API #3 — slavart.gamesdrive.io: public Slavart resolver (active 2025, github.com/tywil04/slavartdl)
+  // API #3 — slavart.gamesdrive.net: public Slavart resolver 
   {
     name: 'slavart',
     method: 'POST',
-    buildUrl: () => 'https://slavart.gamesdrive.io/api/download',
-    buildBody: (trackId) => JSON.stringify({
-      url: `https://open.qobuz.com/track/${trackId}`
+    buildUrl: () => 'https://slavart.gamesdrive.net/api/download/track',
+    buildBody: (trackId, quality) => JSON.stringify({
+      id: String(trackId),
+      quality: quality === '27' ? 4 : quality === '7' ? 3 : 2,
+      service: 'qobuz'
+    }),
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+    extractUrl: (data) => data.url || data.download_url || data.link || data.file || null
+  },
+  // API #4 — squid.wtf: public Qobuz downloader (active 2026)
+  {
+    name: 'squid',
+    method: 'POST',
+    buildUrl: () => 'https://qobuz.squid.wtf/api/download',
+    buildBody: (trackId, quality) => JSON.stringify({
+      url: `https://open.qobuz.com/track/${trackId}`,
+      quality: quality === '27' ? 'max' : quality === '7' ? 'hires' : 'lossless'
+    }),
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+    extractUrl: (data) => data.url || data.download_url || data.stream_url || data.file || null
+  },
+  // API #5 — doubledouble.top: multi-service music downloader
+  {
+    name: 'doubledouble',
+    method: 'POST',
+    buildUrl: () => 'https://api.doubledouble.top/qobuz/track',
+    buildBody: (trackId, quality) => JSON.stringify({
+      trackId: String(trackId),
+      quality: quality === '27' ? 'hi-res-max' : quality === '7' ? 'hi-res' : 'lossless'
+    }),
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+    extractUrl: (data) => data.url || data.download_url || data.streamUrl || data.link || null
+  },
+  // API #6 — qobuz.qqdl.site: Qobuz downloader
+  {
+    name: 'qqdl',
+    method: 'POST',
+    buildUrl: () => 'https://qobuz.qqdl.site/api/download',
+    buildBody: (trackId, quality) => JSON.stringify({
+      url: `https://open.qobuz.com/track/${trackId}`,
+      quality: quality === '27' ? '4' : quality === '7' ? '3' : '2'
     }),
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
     extractUrl: (data) => data.url || data.download_url || data.link || null
   },
-  // API #4 — spotbye.qzz.io: Spotbye Qobuz resolver (active 2025, github.com/spotbye/SpotiFLAC)
-  {
-    name: 'spotbye',
-    method: 'POST',
-    buildUrl: () => 'https://qobuz.spotbye.qzz.io/api',
-    buildBody: (trackId, quality) => JSON.stringify({
-      track_id: String(trackId),
-      quality: quality === '27' ? 'hi-res-max' : quality === '7' ? 'hi-res' : 'lossless'
-    }),
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'SpotiFLAC/2.0' },
-    extractUrl: (data) => data.url || data.download_url || data.stream_url || null
-  },
-  // API #5 — musicdl.me: multi-platform public download API (active 2025, github.com/ifauzeee/QBZ-Downloader)
+  // API #7 — musicdl.me: multi-platform public download API
   {
     name: 'musicdl',
     method: 'POST',
@@ -69,6 +93,42 @@ const QOBUZ_STREAM_APIS = [
     }),
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
     extractUrl: (data) => data.download_url || data.url || data.link || data.data?.url || null
+  },
+  // API #8 — free-mp3-download.net: fallback downloader
+  {
+    name: 'freemp3',
+    method: 'POST',
+    buildUrl: () => 'https://free-mp3-download.net/api/qobuz',
+    buildBody: (trackId, quality) => JSON.stringify({
+      track_url: `https://open.qobuz.com/track/${trackId}`,
+      quality: quality === '27' ? 'flac_hires' : quality === '7' ? 'flac_hires' : 'flac'
+    }),
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+    extractUrl: (data) => data.url || data.download_url || data.file_url || null
+  },
+  // API #9 — spotbye: Spotbye Qobuz resolver
+  {
+    name: 'spotbye',
+    method: 'POST',
+    buildUrl: () => 'https://qobuz.spotbye.qzz.io/api',
+    buildBody: (trackId, quality) => JSON.stringify({
+      track_id: String(trackId),
+      quality: quality === '27' ? 'hi-res-max' : quality === '7' ? 'hi-res' : 'lossless'
+    }),
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'SpotiFLAC/2.0' },
+    extractUrl: (data) => data.url || data.download_url || data.stream_url || null
+  },
+  // API #10 — orion.divolt.xyz: Orion music resolver
+  {
+    name: 'orion',
+    method: 'POST',
+    buildUrl: () => 'https://orion.divolt.xyz/api/qobuz/stream',
+    buildBody: (trackId, quality) => JSON.stringify({
+      id: String(trackId),
+      quality: quality === '27' ? 27 : quality === '7' ? 7 : 6
+    }),
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+    extractUrl: (data) => data.url || data.stream_url || data.download_url || null
   }
 ];
 
