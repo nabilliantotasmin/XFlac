@@ -1,0 +1,44 @@
+{
+  "lyrics": {
+    "primary": "lrclib",
+    "providers": [
+      "lrclib",
+      "spotify",
+      "musixmatch",
+      "netease",
+      "genius",
+      "tekstowo",
+      "azlyrics"
+    ],
+    "fallback": true,
+    "spotifyToken": ""
+  },
+  "metadata": {
+    "primary": "musicbrainz",
+    "fallback": true,
+    "autoTag": true,
+    "sources": [
+      "musicbrainz",
+      "itunes",
+      "deezer",
+      "spotify"
+    ]
+  },
+  "streaming": {
+    "qobuzResolver": "zarz",
+    "qobuzResolvers": [
+      "zarz",
+      "lucida",
+      "slavart",
+      "spotbye",
+      "musicdl"
+    ],
+    "qobuzFallback": true,
+    "qobuzQuality": "6"
+  },
+  "download": {
+    "autoTag": true,
+    "embedLyrics": true,
+    "embedCover": true
+  }
+}
