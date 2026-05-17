@@ -4,10 +4,12 @@ const crypto = require('crypto');
 
 // ===================================================================
 // QOBUZ STREAM APIs (full-duration, no preview)
-// Sources: Various public music resolvers, updated May 2026
+// Sources: github.com/spotbye/SpotiFLAC-Next, github.com/afkarxyz/SpotiFLAC-Next,
+//          github.com/zarzet/SpotiFLAC-Mobile, github.com/jelni/lucida-downloader,
+//          github.com/tywil04/slavartdl, github.com/ifauzeee/QBZ-Downloader
 // ===================================================================
 const QOBUZ_STREAM_APIS = [
-  // API #1 — zarz.moe: primary resolver, SpotiFLAC ecosystem
+  // API #1 — zarz.moe: primary resolver, SpotiFLAC ecosystem (active 2025)
   {
     name: 'zarz',
     method: 'POST',
@@ -20,7 +22,7 @@ const QOBUZ_STREAM_APIS = [
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'SpotiFLAC-Mobile/4.5.1' },
     extractUrl: (data) => data.download_url || data.url || data.link || data.data?.url || null
   },
-  // API #2 — lucida.to: public multi-platform music resolver
+  // API #2 — lucida.to: public multi-platform music resolver (active 2025, github.com/jelni/lucida-downloader)
   {
     name: 'lucida',
     method: 'POST',
@@ -32,81 +34,18 @@ const QOBUZ_STREAM_APIS = [
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
     extractUrl: (data) => data.url || data.download_url || data.stream_url || null
   },
-  // API #3 — slavart.gamesdrive.net: public Slavart resolver 
+  // API #3 — slavart.gamesdrive.io: public Slavart resolver (active 2025, github.com/tywil04/slavartdl)
   {
     name: 'slavart',
     method: 'POST',
-    buildUrl: () => 'https://slavart.gamesdrive.net/api/download/track',
-    buildBody: (trackId, quality) => JSON.stringify({
-      id: String(trackId),
-      quality: quality === '27' ? 4 : quality === '7' ? 3 : 2,
-      service: 'qobuz'
-    }),
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-    extractUrl: (data) => data.url || data.download_url || data.link || data.file || null
-  },
-  // API #4 — squid.wtf: public Qobuz downloader (active 2026)
-  {
-    name: 'squid',
-    method: 'POST',
-    buildUrl: () => 'https://qobuz.squid.wtf/api/download',
-    buildBody: (trackId, quality) => JSON.stringify({
-      url: `https://open.qobuz.com/track/${trackId}`,
-      quality: quality === '27' ? 'max' : quality === '7' ? 'hires' : 'lossless'
-    }),
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-    extractUrl: (data) => data.url || data.download_url || data.stream_url || data.file || null
-  },
-  // API #5 — doubledouble.top: multi-service music downloader
-  {
-    name: 'doubledouble',
-    method: 'POST',
-    buildUrl: () => 'https://api.doubledouble.top/qobuz/track',
-    buildBody: (trackId, quality) => JSON.stringify({
-      trackId: String(trackId),
-      quality: quality === '27' ? 'hi-res-max' : quality === '7' ? 'hi-res' : 'lossless'
-    }),
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-    extractUrl: (data) => data.url || data.download_url || data.streamUrl || data.link || null
-  },
-  // API #6 — qobuz.qqdl.site: Qobuz downloader
-  {
-    name: 'qqdl',
-    method: 'POST',
-    buildUrl: () => 'https://qobuz.qqdl.site/api/download',
-    buildBody: (trackId, quality) => JSON.stringify({
-      url: `https://open.qobuz.com/track/${trackId}`,
-      quality: quality === '27' ? '4' : quality === '7' ? '3' : '2'
+    buildUrl: () => 'https://slavart.gamesdrive.io/api/download',
+    buildBody: (trackId) => JSON.stringify({
+      url: `https://open.qobuz.com/track/${trackId}`
     }),
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
     extractUrl: (data) => data.url || data.download_url || data.link || null
   },
-  // API #7 — musicdl.me: multi-platform public download API
-  {
-    name: 'musicdl',
-    method: 'POST',
-    buildUrl: () => 'https://www.musicdl.me/api/qobuz/download',
-    buildBody: (trackId, quality) => JSON.stringify({
-      quality: quality === '27' ? 'hi-res-max' : quality === '7' ? 'hi-res' : 'cd',
-      upload_to_r2: false,
-      url: `https://open.qobuz.com/track/${trackId}`
-    }),
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-    extractUrl: (data) => data.download_url || data.url || data.link || data.data?.url || null
-  },
-  // API #8 — free-mp3-download.net: fallback downloader
-  {
-    name: 'freemp3',
-    method: 'POST',
-    buildUrl: () => 'https://free-mp3-download.net/api/qobuz',
-    buildBody: (trackId, quality) => JSON.stringify({
-      track_url: `https://open.qobuz.com/track/${trackId}`,
-      quality: quality === '27' ? 'flac_hires' : quality === '7' ? 'flac_hires' : 'flac'
-    }),
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-    extractUrl: (data) => data.url || data.download_url || data.file_url || null
-  },
-  // API #9 — spotbye: Spotbye Qobuz resolver
+  // API #4 — spotbye.qzz.io: Spotbye Qobuz resolver (active 2025, github.com/spotbye/SpotiFLAC)
   {
     name: 'spotbye',
     method: 'POST',
@@ -118,17 +57,18 @@ const QOBUZ_STREAM_APIS = [
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'SpotiFLAC/2.0' },
     extractUrl: (data) => data.url || data.download_url || data.stream_url || null
   },
-  // API #10 — orion.divolt.xyz: Orion music resolver
+  // API #5 — musicdl.me: multi-platform public download API (active 2025, github.com/ifauzeee/QBZ-Downloader)
   {
-    name: 'orion',
+    name: 'musicdl',
     method: 'POST',
-    buildUrl: () => 'https://orion.divolt.xyz/api/qobuz/stream',
+    buildUrl: () => 'https://www.musicdl.me/api/qobuz/download',
     buildBody: (trackId, quality) => JSON.stringify({
-      id: String(trackId),
-      quality: quality === '27' ? 27 : quality === '7' ? 7 : 6
+      quality: quality === '27' ? 'hi-res-max' : quality === '7' ? 'hi-res' : 'cd',
+      upload_to_r2: false,
+      url: `https://open.qobuz.com/track/${trackId}`
     }),
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-    extractUrl: (data) => data.url || data.stream_url || data.download_url || null
+    extractUrl: (data) => data.download_url || data.url || data.link || data.data?.url || null
   }
 ];
 
@@ -154,47 +94,6 @@ class QobuzProvider {
     this.name = 'Qobuz';
     this.appId = '712109809';
     this.secret = '589be88e4538daea11f509d29e4a23b1';
-    this.resolverPriority = null;
-  }
-
-  /**
-   * Set custom resolver priority order
-   * @param {string[]} priority - Array of resolver names (e.g., ['lucida', 'zarz', 'slavart'])
-   */
-  setResolverPriority(priority) {
-    if (!Array.isArray(priority) || priority.length === 0) {
-      this.resolverPriority = null;
-      return;
-    }
-    this.resolverPriority = priority;
-    console.log(`[qobuz] Resolver priority set to: ${priority.join(', ')}`);
-  }
-
-  /**
-   * Reorder APIs based on priority list
-   * @param {Array} apis - Array of API resolver objects
-   * @param {string[]} priority - Priority order array
-   * @returns {Array} Reordered APIs array - ONLY includes resolvers in priority list
-   */
-  _reorderApis(apis, priority) {
-    const apiMap = new Map(apis.map(api => [api.name, api]));
-    const reordered = [];
-    
-    // Add ONLY APIs that are in the priority list, in order
-    // This respects the "fallback off" setting - if only 1 resolver is in priority,
-    // only that resolver will be tried
-    for (const name of priority) {
-      if (apiMap.has(name)) {
-        reordered.push(apiMap.get(name));
-      }
-    }
-    
-    // If no valid resolvers found in priority list, fall back to all APIs
-    if (reordered.length === 0) {
-      return apis;
-    }
-    
-    return reordered;
   }
 
   sign(path, params, ts, secret) {
@@ -231,15 +130,7 @@ class QobuzProvider {
   async getStreamUrl(trackId, quality) {
     let lastError = null;
 
-    // Use custom resolver priority if set, otherwise use default order
-    const apis = this.resolverPriority 
-      ? this._reorderApis(QOBUZ_STREAM_APIS, this.resolverPriority)
-      : QOBUZ_STREAM_APIS;
-
-    console.log(`[qobuz] Resolver priority: ${this.resolverPriority ? this.resolverPriority.join(', ') : 'default (all)'}`);
-    console.log(`[qobuz] Will try ${apis.length} resolver(s): ${apis.map(a => a.name).join(', ')}`);
-
-    for (const api of apis) {
+    for (const api of QOBUZ_STREAM_APIS) {
       try {
         console.log(`[qobuz] Trying stream API: ${api.name}`);
         const url = api.buildUrl(trackId, quality);

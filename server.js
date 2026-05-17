@@ -7,10 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// ─── API Router (NEW) ───
-const { routeApi } = require('./api');
-console.log('[server] API router loaded');
-
 // ─── Unified Search Engine ───
 let unifiedSearch, unifiedArtistSearch, getProviderMeta, getProvider, getProviderRegistry;
 try {
@@ -25,7 +21,7 @@ try {
   console.warn('[server] unifiedSearch not available:', e.message);
 }
 
-// ─── Lyrics Engine (deprecated - now handled by api/lyrics.js) ───
+// ─── Lyrics Engine ───
 let fetchLyricsFromEngine;
 try {
   const ly = require('./lib/lyrics');
@@ -313,11 +309,11 @@ function getExpectedAudioInfo(provider, quality) {
   return provSpecs[quality] || provSpecs[Object.keys(provSpecs)[0]] || { format: 'unknown', bitDepth: 16, sampleRate: 44100, channels: 2, hiRes: false, label: 'Unknown' };
 }
 
-async function applyTags(filePath, track, options = {}) {
+async function applyTags(filePath, track) {
   if (!tagFile) return;
   try {
     console.log(`[tagger] Applying metadata for: ${track.title}`);
-    await tagFile(filePath, track, (msg) => console.log(`[tagger] ${msg}`), options);
+    await tagFile(filePath, track, (msg) => console.log(`[tagger] ${msg}`));
     console.log(`[tagger] Success: ${path.basename(filePath)}`);
   } catch (err) {
     console.warn(`[tagger] Failed for ${path.basename(filePath)}: ${err.message}`);
@@ -643,14 +639,6 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    // ─── NEW API MODULES (Settings, Lyrics, Metadata, Stream) ───
-    // Try routing to new API modules first (settings, lyrics, metadata, stream)
-    // These endpoints: /api/settings, /api/lyrics, /api/metadata/*, /api/stream-*, /api/proxy-stream
-    const apiHandled = await routeApi(req, res);
-    if (apiHandled) return;
-    
-    // ─── LEGACY API ENDPOINTS (below will be kept for backwards compatibility) ───
-    
     if (p === '/api/providers' && m === 'GET') {
       // Return provider registry for download modal (quality picker, etc.)
       // No legacy single-provider mode — unified search is the only search mode.
@@ -861,7 +849,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/download' && m === 'POST') {
       const body = await parseBody(req);
-      const { provider, track, quality, settings } = body;
+      const { provider, track, quality } = body;
       const provObj = providers[provider];
 
       if (!provObj) return json(res, { error: 'Unknown provider' }, 400);
@@ -882,19 +870,7 @@ const server = http.createServer(async (req, res) => {
         const job = jobs.get(jobId);
         if (job) {
           const actualPath = finalPath || outPath;
-          
-          // Apply tags with settings from client
-          const tagOptions = {};
-          if (settings?.metadata) {
-            tagOptions.metadataSource = settings.metadata.primary;
-            tagOptions.metadataFallback = settings.metadata.fallback;
-            tagOptions.autoTag = settings.metadata.autoTag;
-          }
-          if (settings?.lyrics) {
-            tagOptions.lyricsProviders = settings.lyrics.providers;
-          }
-          
-          await applyTags(actualPath, track, tagOptions);
+          await applyTags(actualPath, track);
           job.status = 'completed';
           job.progress = 100;
           job.filePath = path.basename(actualPath);
@@ -923,7 +899,7 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/batch-download' && m === 'POST') {
       const body = await parseBody(req);
-      const { provider, tracks, quality, settings } = body;
+      const { provider, tracks, quality } = body;
       const provObj = providers[provider];
 
       if (!provObj) return json(res, { error: 'Unknown provider' }, 400);
@@ -949,19 +925,7 @@ const server = http.createServer(async (req, res) => {
             const outPath = path.join(DL_DIR, outName + ".tmp");
             const finalPath = await provObj.download(t, quality, outPath, (pct) => { t.progress = Math.min(pct, 99); });
             const actualPath = finalPath || outPath;
-            
-            // Apply tags with settings from client
-            const tagOptions = {};
-            if (settings?.metadata) {
-              tagOptions.metadataSource = settings.metadata.primary;
-              tagOptions.metadataFallback = settings.metadata.fallback;
-              tagOptions.autoTag = settings.metadata.autoTag;
-            }
-            if (settings?.lyrics) {
-              tagOptions.lyricsProviders = settings.lyrics.providers;
-            }
-            
-            await applyTags(actualPath, t, tagOptions);
+            await applyTags(actualPath, t);
             t.status = 'completed'; t.progress = 100;
             t.filePath = path.basename(actualPath);
             batch.completed++;
@@ -1004,12 +968,41 @@ const server = http.createServer(async (req, res) => {
 
 
     // ─── LYRICS ──────────────────────────────────────────────────────────────────
-    // GET /api/lyrics?title=&artist=&album=&duration=&isrc=&providers=
+    // GET /api/lyrics?title=&artist=&album=&duration=&isrc=
     //
     // Fetches lyrics from multiple providers (Apple, Musixmatch, LRCLIB, Genius,
     // NetEase, LyricsOvh, Amazon). Returns { lyrics, provider, synced }.
     // "synced" is true when the lyrics contain LRC timestamps [mm:ss.cs].
-    // 
+    if (p === '/api/lyrics' && m === 'GET') {
+      const title    = parsed.searchParams.get('title')    || '';
+      const artist   = parsed.searchParams.get('artist')   || '';
+      const album    = parsed.searchParams.get('album')    || '';
+      const duration = parseFloat(parsed.searchParams.get('duration') || '0');
+      const isrc     = parsed.searchParams.get('isrc')     || '';
+
+      if (!title || !artist) return json(res, { error: 'Missing title or artist' }, 400);
+      if (!fetchLyricsFromEngine) return json(res, { lyrics: '', provider: '', synced: false });
+
+      try {
+        const { lyrics, provider } = await fetchLyricsFromEngine({
+          trackName:  title,
+          artistName: artist,
+          albumName:  album,
+          durationS:  duration,
+          isrc,
+          providers: ['apple', 'musixmatch', 'lrclib', 'genius', 'netease', 'lyricsovh', 'amazon']
+        });
+
+        // Detect if lyrics are LRC-synced (contain timestamp tags)
+        const synced = /\[\d{2}:\d{2}[.:]\d{2}\]/.test(lyrics);
+
+        return json(res, { lyrics: lyrics || '', provider: provider || '', synced });
+      } catch (err) {
+        console.error('[lyrics] error:', err.message);
+        return json(res, { lyrics: '', provider: '', synced: false, error: err.message });
+      }
+    }
+
     // ─── UNIFIED SEARCH ──────────────────────────────────────────────────────────
     // GET /api/unified-search?q=<query>&limit=<n>&providers=<csv>
     //
@@ -1098,13 +1091,283 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ─── STREAMING ENDPOINTS MOVED TO api/stream.js ───────────────────────────
-    // The following endpoints are now handled by api/stream.js:
-    //  - GET /api/stream-url
-    //  - GET /api/unified-stream-url
-    //  - GET /api/proxy-stream
-    //  - GET /api/stream-audio-info
-    // They are routed via routeApi() at the top of this handler.
+    // ─── STREAM AUDIO INFO (Hi-Res detection for proxy streams) ───────────────
+    // GET /api/stream-audio-info?provider=qobuz&id=<trackId>&quality=27
+    // Returns expected audio quality info based on provider/quality selection.
+    if (p === '/api/stream-audio-info' && m === 'GET') {
+      const provKey = parsed.searchParams.get('provider');
+      const quality = parsed.searchParams.get('quality') || '6';
+
+      // Return expected audio specs based on provider quality tier
+      const info = getExpectedAudioInfo(provKey, quality);
+      return json(res, info);
+    }
+
+    // ─── UNIFIED STREAM URL ───────────────────────────────────────────────────
+    // GET /api/unified-stream-url?id=<trackId>&provider=qobuz&quality=6
+    //
+    // Mencoba stream langsung. Hanya Qobuz yang diprioritaskan untuk streaming.
+    // Jika provider bukan Qobuz (atau tidak support stream), kembalikan error
+    // sehingga UI dapat menampilkan opsi download dari provider lain.
+    if (p === '/api/unified-stream-url' && m === 'GET') {
+      const provKey  = parsed.searchParams.get('provider');
+      const trackId  = parsed.searchParams.get('id');
+      const quality  = parsed.searchParams.get('quality') || '6';
+
+      if (!trackId) return json(res, { error: 'Missing id' }, 400);
+      if (!provKey)  return json(res, { error: 'Missing provider' }, 400);
+
+      // Hanya Qobuz yang boleh di-stream langsung sesuai requirement
+      if (provKey !== 'qobuz') {
+        return json(res, {
+          error:     `Direct streaming hanya tersedia untuk Qobuz. Provider "${provKey}" harus didownload terlebih dahulu.`,
+          canStream: false,
+          provider:  provKey
+        }, 400);
+      }
+
+      const provObj = providers[provKey] || (getProvider ? getProvider(provKey) : null);
+      if (!provObj) return json(res, { error: 'Provider not available' }, 400);
+      if (typeof provObj.getStreamUrlOnly !== 'function')
+        return json(res, { error: 'Provider does not support direct streaming' }, 400);
+
+      try {
+        const result = await provObj.getStreamUrlOnly(trackId, quality);
+        const remoteUrl = typeof result === 'string' ? result : result.url || result.streamUrl;
+        const encrypted = typeof result === 'string' ? false  : !!(result.encrypted || result.decryptionKey);
+        const format    = typeof result === 'string' ? 'flac' : (result.format || result.codec || 'flac');
+        const decKey    = typeof result === 'string' ? '' : (result.decryptionKey || '') || (result.encrypted ? trackId : '');
+
+        if (!remoteUrl) return json(res, { error: 'Resolver returned no URL' }, 502);
+
+        const meta = Buffer.from(JSON.stringify({
+          url: remoteUrl, enc: encrypted, key: decKey, fmt: format, prov: provKey
+        })).toString('base64url');
+
+        return json(res, {
+          proxyUrl:  `/api/proxy-stream?t=${meta}`,
+          streamUrl: remoteUrl,
+          encrypted,
+          format,
+          provider:  provKey,
+          canStream: true
+        });
+      } catch (err) {
+        console.error(`[unified-stream-url] ${provKey}/${trackId} error:`, err.message);
+        return json(res, { error: err.message, canStream: false }, 502);
+      }
+    }
+
+    // ─── STREAM URL RESOLVER ────────────────────────────────────────────────────
+    // GET /api/stream-url?provider=qobuz&id=123456789&quality=6
+    // Returns { streamUrl, proxyUrl, encrypted, format } — no file written to disk
+    // Only providers that implement getStreamUrlOnly() support this endpoint.
+    // Tidal, Deezer, and Amazon do NOT implement getStreamUrlOnly — they require
+    // download first (full offline download) before playback.
+    if (p === '/api/stream-url' && m === 'GET') {
+      const prov     = parsed.searchParams.get('provider');
+      const trackId  = parsed.searchParams.get('id');
+      const quality  = parsed.searchParams.get('quality') || '6';
+
+      if (!trackId) return json(res, { error: 'Missing id' }, 400);
+
+      const provObj = providers[prov];
+      if (!provObj) return json(res, { error: 'Unknown provider' }, 400);
+      if (typeof provObj.getStreamUrlOnly !== 'function')
+        return json(res, { error: `Provider "${prov}" does not support direct streaming. Please download the track first.` }, 400);
+
+      try {
+        const result = await provObj.getStreamUrlOnly(trackId, quality);
+
+        // Normalise result from all providers into a unified shape
+        const remoteUrl = typeof result === 'string' ? result : result.url || result.streamUrl;
+        const encrypted = typeof result === 'string' ? false  : !!(result.encrypted || result.decryptionKey);
+        const format    = typeof result === 'string' ? 'flac' : (result.format || result.codec || 'flac');
+        const decKey    = typeof result === 'string' ? ''
+          : (result.decryptionKey || '') || (result.encrypted ? trackId : '');
+
+        if (!remoteUrl) return json(res, { error: 'Resolver returned no URL' }, 502);
+
+        const meta = Buffer.from(JSON.stringify({
+          url: remoteUrl,
+          enc: encrypted,
+          key: decKey,
+          fmt: format,
+          prov
+        })).toString('base64url');
+
+        return json(res, {
+          proxyUrl:  `/api/proxy-stream?t=${meta}`,
+          streamUrl: remoteUrl,
+          encrypted,
+          format,
+          provider: prov
+        });
+      } catch (err) {
+        console.error(`[stream-url] ${prov}/${trackId} error:`, err.message);
+        return json(res, { error: err.message }, 502);
+      }
+    }
+
+    // ─── PROXY STREAM (Task #2) ──────────────────────────────────────────────
+    // GET /api/proxy-stream?t=<base64url-token>
+    // Pipes the remote audio stream to the browser with HTTP Range support.
+    // For Deezer (Blowfish-encrypted), decrypts on-the-fly in 2048-byte chunks.
+    if (p === '/api/proxy-stream' && m === 'GET') {
+      const token = parsed.searchParams.get('t');
+      if (!token) { res.writeHead(400); return res.end('Missing token'); }
+
+      let meta;
+      try {
+        meta = JSON.parse(Buffer.from(token, 'base64url').toString('utf8'));
+      } catch {
+        res.writeHead(400); return res.end('Invalid token');
+      }
+
+      const { url: remoteUrl, enc: encrypted, key: decKey, fmt: format, prov } = meta;
+      if (!remoteUrl) { res.writeHead(400); return res.end('No remote URL'); }
+
+      const MIME_MAP = {
+        flac: 'audio/flac', mp3: 'audio/mpeg', m4a: 'audio/mp4',
+        opus: 'audio/opus', ogg: 'audio/ogg', wav: 'audio/wav',
+        aac: 'audio/aac', eac3: 'audio/mp4', mha1: 'audio/mp4'
+      };
+      const contentType = MIME_MAP[format] || 'audio/flac';
+      const rangeHeader = req.headers.range;
+
+      // Helper: make a raw streaming HTTP/HTTPS request (no body buffering).
+      // Follows up to 5 redirects. Returns { statusCode, headers, stream }.
+      function fetchRemote(url, rangeHdr, redirectsLeft) {
+        if (redirectsLeft === undefined) redirectsLeft = 5;
+        return new Promise((resolve, reject) => {
+          const client = url.startsWith('https') ? require('https') : require('http');
+          const hdrs = {
+            'User-Agent': 'Mozilla/5.0 (compatible; XenoFlac/1.0)',
+            'Accept': '*/*'
+          };
+          if (rangeHdr) hdrs['Range'] = rangeHdr;
+
+          const reqOut = client.get(url, { headers: hdrs, timeout: 60000 }, (remRes) => {
+            const sc = remRes.statusCode;
+            if ([301, 302, 303, 307, 308].includes(sc) && remRes.headers.location) {
+              remRes.resume(); // drain
+              if (redirectsLeft <= 0) return reject(new Error('Too many redirects'));
+              const next = new URL(remRes.headers.location, url).href;
+              return fetchRemote(next, rangeHdr, redirectsLeft - 1).then(resolve, reject);
+            }
+            resolve({ statusCode: sc, headers: remRes.headers, stream: remRes });
+          });
+          reqOut.on('error', reject);
+          reqOut.on('timeout', () => { reqOut.destroy(); reject(new Error('Remote timeout')); });
+        });
+      }
+
+      // ── Plain (non-encrypted) proxy ──────────────────────────────────────
+      if (!encrypted) {
+        try {
+          const remote = await fetchRemote(remoteUrl, rangeHeader);
+
+          const status = remote.statusCode === 206 ? 206 : 200;
+          const outHeaders = {
+            'Content-Type': contentType,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff'
+          };
+          if (remote.headers['content-length'])
+            outHeaders['Content-Length'] = remote.headers['content-length'];
+          if (remote.headers['content-range'])
+            outHeaders['Content-Range'] = remote.headers['content-range'];
+
+          res.writeHead(status, outHeaders);
+          remote.stream.pipe(res);
+          remote.stream.on('error', () => res.end());
+        } catch (err) {
+          console.error('[proxy-stream] plain fetch error:', err.message);
+          res.writeHead(502); res.end('Upstream error: ' + err.message);
+        }
+        return;
+      }
+
+      // ── Blowfish-decrypting proxy (Deezer) ──────────────────────────────
+      // Deezer encrypts every 3rd 2048-byte chunk with Blowfish-CBC.
+      // We stream the whole remote file, decrypt on-the-fly, then pipe to browser.
+      // NOTE: because we must decrypt the entire stream sequentially, we cannot
+      // honour arbitrary byte-range requests — we serve the full stream and let
+      // the browser buffer. Seeking is limited to what the browser can do in-memory.
+      try {
+        let Blowfish;
+        try { Blowfish = require('egoroof-blowfish'); } catch {
+          res.writeHead(501); return res.end('Blowfish library not available');
+        }
+
+        const BF_SECRET   = 'g4el58wc0zvf9na1';
+        const BF_IV_HEX   = '0001020304050607';
+        const CHUNK_SIZE  = 2048;
+
+        function md5hex(s) {
+          return crypto.createHash('md5').update(s).digest('hex');
+        }
+        function trackKeyHex(id) {
+          const m = md5hex(String(id));
+          let out = '';
+          for (let i = 0; i < 16; i++)
+            out += ((m.charCodeAt(i) ^ m.charCodeAt(i + 16) ^ BF_SECRET.charCodeAt(i)) & 0xff)
+              .toString(16).padStart(2, '0');
+          return out;
+        }
+
+        // For Deezer: decKey in the token IS the track ID (we derive Blowfish key from it).
+        const trackIdForKey = decKey || remoteUrl.match(/\/(\d+)[/?]/)?.[1] || '0';
+        const keyHex  = trackKeyHex(trackIdForKey);
+        const bfKey   = Buffer.from(keyHex, 'hex');
+        const bfIv    = Buffer.from(BF_IV_HEX, 'hex');
+
+        const remote = await fetchRemote(remoteUrl, null); // always full stream
+
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Accept-Ranges': 'none',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store',
+          'Transfer-Encoding': 'chunked'
+        });
+
+        // Accumulate binary data then decrypt+forward in CHUNK_SIZE blocks
+        const chunks = [];
+        remote.stream.on('data', chunk => chunks.push(chunk));
+        remote.stream.on('error', () => res.end());
+        remote.stream.on('end', () => {
+          const data = Buffer.concat(chunks);
+          let chunkIdx = 0;
+          for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+            let chunk = data.slice(i, i + CHUNK_SIZE);
+
+            // Every 3rd full-size chunk is Blowfish-encrypted
+            if (chunkIdx % 3 === 0 && chunk.length === CHUNK_SIZE) {
+              try {
+                const bf = new Blowfish(bfKey, Blowfish.MODE.CBC, Blowfish.PADDING.NULL);
+                bf.setIv(bfIv);
+                const dec = Buffer.from(bf.decode(chunk, Blowfish.TYPE.UINT8_ARRAY));
+                // Pad back to CHUNK_SIZE (blowfish strips trailing 0x00)
+                const padded = Buffer.alloc(CHUNK_SIZE, 0);
+                dec.copy(padded);
+                chunk = padded;
+              } catch { /* keep original on error */ }
+            }
+            res.write(chunk);
+            chunkIdx++;
+          }
+          res.end();
+        });
+      } catch (err) {
+        console.error('[proxy-stream] deezer decrypt error:', err.message);
+        if (!res.headersSent) { res.writeHead(502); }
+        res.end('Upstream error: ' + err.message);
+      }
+      return;
+    }
 
     return json(res, { error: 'Not found' }, 404);
 
