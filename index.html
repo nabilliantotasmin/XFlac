@@ -21,6 +21,9 @@
         <header class="app-header">
             <h1 class="logo">Xeno<span>flac</span></h1>
             <p class="tagline">All providers. One search.</p>
+            <button id="settings-btn" class="settings-header-btn" title="Settings" type="button">
+                <i class="fas fa-gear"></i> Settings
+            </button>
         </header>
 
         <!-- ── SEARCH BAR ── -->
@@ -228,49 +231,62 @@
         <div id="player-bg-blur" class="player-bg-blur"></div>
         <div class="player-bg-overlay"></div>
 
-        <!-- Close / minimise -->
-        <button id="player-close" class="player-modal-close" title="Close player">
-            <i class="fas fa-chevron-down"></i>
-        </button>
+        <!-- Top bar: close + track source badge -->
+        <div class="player-topbar">
+            <button id="player-close" class="player-modal-close" title="Minimise">
+                <i class="fas fa-chevron-down"></i>
+            </button>
+            <span class="player-topbar-label">Now Playing</span>
+            <a id="player-download" class="player-topbar-btn" href="#" download title="Save file">
+                <i class="fas fa-arrow-down-to-line"></i>
+            </a>
+        </div>
 
-        <!-- ── Main layout: art + info (left) | lyrics (right) ── -->
+        <!-- ── Main layout ── -->
         <div class="player-layout">
 
-            <!-- LEFT PANEL -->
+            <!-- LEFT / MAIN PANEL -->
             <div class="player-left">
 
-                <!-- Album artwork -->
-                <div class="player-artwork-wrap">
-                    <img id="player-cover" class="player-artwork" src="" alt="">
-                    <div id="player-artwork-placeholder" class="player-artwork-placeholder">
-                        <i class="fas fa-music"></i>
+                <!-- Album artwork — vinyl disc with surrounding spectrum -->
+                <div class="player-artwork-wrap" id="player-artwork-wrap">
+                    <!-- Spectrum canvas (drawn behind/around the disc) -->
+                    <canvas id="vinyl-spectrum-canvas" class="vinyl-spectrum-canvas"></canvas>
+                    <!-- Vinyl disc -->
+                    <div class="vinyl-disc" id="vinyl-disc">
+                        <div class="vinyl-grooves"></div>
+                        <img id="player-cover" class="player-artwork" src="" alt="">
+                        <div id="player-artwork-placeholder" class="player-artwork-placeholder">
+                            <i class="fas fa-music"></i>
+                        </div>
+                        <div class="vinyl-center-hole"></div>
                     </div>
-                    <!-- Vinyl ring animation while playing -->
                     <div id="player-vinyl-ring" class="player-vinyl-ring"></div>
                 </div>
 
                 <!-- Track metadata -->
                 <div class="player-meta">
-                    <div class="player-meta-top">
-                        <div class="player-meta-text">
-                            <div id="player-title" class="player-title-text">Nothing playing</div>
-                            <div id="player-artist" class="player-artist-text">—</div>
-                            <div id="player-album" class="player-album-text"></div>
-                            <div id="player-hires-badge" class="player-hires-badge hidden">
-                                <span class="hires-icon">HR</span>
-                                <span id="player-audio-info" class="hires-info"></span>
-                            </div>
+                    <div class="player-meta-text">
+                        <div id="player-title" class="player-title-text">Nothing playing</div>
+                        <div id="player-artist" class="player-artist-text">—</div>
+                        <div id="player-album" class="player-album-text"></div>
+                    </div>
+                    <div class="player-meta-badges">
+                        <div id="player-hires-badge" class="player-hires-badge hidden">
+                            <span class="hires-icon">HR</span>
+                            <span id="player-audio-info" class="hires-info"></span>
                         </div>
-                        <a id="player-download" class="player-action-btn" href="#" download title="Save file">
-                            <i class="fas fa-download"></i>
-                        </a>
+                        <button id="player-lyrics-toggle" class="player-lyrics-toggle-btn" title="Lyrics">
+                            <i class="fas fa-align-left"></i>
+                            <span>Lyrics</span>
+                        </button>
                     </div>
                 </div>
 
                 <!-- Buffering indicator -->
                 <div id="player-buffering" class="player-buffering hidden">
                     <div class="buffering-spinner"></div>
-                    <span>Buffering Hi-Res audio…</span>
+                    <span>Buffering…</span>
                 </div>
 
                 <!-- Progress bar -->
@@ -313,9 +329,53 @@
                     </button>
                     <input id="player-volume" class="player-volume-slider" type="range"
                            min="0" max="1" step="0.01" value="1">
-                    <button id="player-lyrics-toggle" class="player-lyrics-toggle-btn" title="Lyrics">
-                        <i class="fas fa-align-left"></i> Lyrics
-                    </button>
+                </div>
+
+                <!-- Spectrum Analyzer (legacy bar view — hidden, replaced by vinyl spectrum) -->
+                <div class="spectrum-wrap hidden" id="spectrum-wrap" style="display:none">
+                    <div class="spectrum-header">
+                        <span class="spectrum-title"><i class="fas fa-wave-square"></i> Spectrum Analyzer</span>
+                        <div class="spectrum-controls">
+                            <button class="spectrum-mode-btn active" data-mode="bars" title="Bar mode">
+                                <i class="fas fa-chart-bar"></i>
+                            </button>
+                            <button class="spectrum-mode-btn" data-mode="line" title="Line mode">
+                                <i class="fas fa-chart-line"></i>
+                            </button>
+                            <button class="spectrum-mode-btn" data-mode="mirror" title="Mirror mode">
+                                <i class="fas fa-arrows-left-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <canvas id="spectrum-canvas" class="spectrum-canvas" width="320" height="120"></canvas>
+                    <div class="spectrum-freq-labels">
+                        <span>20 Hz</span><span>200 Hz</span><span>2 kHz</span><span>20 kHz</span>
+                    </div>
+                </div>
+
+                <!-- Audio File Information -->
+                <div class="audio-info-panel" id="audio-info-panel">
+                    <div class="audio-info-header" id="audio-info-header">
+                        <span class="audio-info-title"><i class="fas fa-circle-info"></i> Audio File Information</span>
+                        <button class="audio-info-toggle" id="audio-info-toggle" title="Toggle">
+                            <i class="fas fa-chevron-down"></i>
+                        </button>
+                    </div>
+                    <div class="audio-info-body" id="audio-info-body">
+                        <div class="audio-info-grid">
+                            <div class="audio-info-row"><span class="ai-label">Type</span><span class="ai-value" id="ai-type">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Sample Rate</span><span class="ai-value" id="ai-samplerate">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Bit Depth</span><span class="ai-value" id="ai-bitdepth">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Channels</span><span class="ai-value" id="ai-channels">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Duration</span><span class="ai-value" id="ai-duration">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Nyquist</span><span class="ai-value" id="ai-nyquist">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Size</span><span class="ai-value" id="ai-size">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Samples</span><span class="ai-value" id="ai-samples">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Analysis Frames</span><span class="ai-value" id="ai-frames">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">FFT Size</span><span class="ai-value" id="ai-fftsize">—</span></div>
+                            <div class="audio-info-row"><span class="ai-label">Freq Resolution</span><span class="ai-value" id="ai-freqres">—</span></div>
+                        </div>
+                    </div>
                 </div>
 
             </div><!-- /player-left -->
@@ -325,6 +385,9 @@
                 <div class="player-lyrics-header">
                     <span class="player-lyrics-title"><i class="fas fa-align-left"></i> Lyrics</span>
                     <span id="player-lyrics-provider" class="player-lyrics-provider-badge"></span>
+                    <button class="player-lyrics-close-btn" id="player-lyrics-close" title="Close lyrics">
+                        <i class="fas fa-xmark"></i>
+                    </button>
                 </div>
                 <div id="player-lyrics-body" class="player-lyrics-body">
                     <div class="player-lyrics-loading hidden" id="player-lyrics-loading">
@@ -370,6 +433,82 @@
             <button id="mini-close" class="mini-btn" title="Close">
                 <i class="fas fa-times"></i>
             </button>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════
+         SETTINGS MODAL
+    ═══════════════════════════════════════════════ -->
+    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+        <div class="modal-content glass-panel settings-modal-content">
+            <button id="settings-close" class="close-btn" aria-label="Close"><i class="fas fa-times"></i></button>
+
+            <h3 id="settings-modal-title" class="settings-modal-title">
+                <i class="fas fa-gear"></i> Settings
+            </h3>
+
+            <!-- Sidebar nav + content -->
+            <div class="settings-layout">
+
+                <!-- Left nav -->
+                <nav class="settings-nav">
+                    <button class="settings-nav-item active" data-section="lyrics" type="button">
+                        <i class="fas fa-align-left"></i> Lyrics
+                    </button>
+                </nav>
+
+                <!-- Right content -->
+                <div class="settings-body">
+
+                    <!-- ── Lyrics section ── -->
+                    <div id="settings-section-lyrics" class="settings-section">
+                        <h4 class="settings-section-title">Lyrics</h4>
+
+                        <!-- Provider picker -->
+                        <div class="settings-field">
+                            <label class="settings-label" for="lyrics-provider-select">
+                                <i class="fas fa-music"></i> Lyrics Provider
+                            </label>
+                            <p class="settings-desc">Provider utama yang digunakan untuk mengambil lirik.</p>
+                            <select id="lyrics-provider-select" class="settings-select">
+                                <option value="spotify">Spotify</option>
+                                <option value="apple">Apple Music</option>
+                                <option value="musixmatch">Musixmatch</option>
+                                <option value="genius">Genius</option>
+                                <option value="lrclib">LRCLIB</option>
+                                <option value="lyricsovh">Lyrics.ovh</option>
+                            </select>
+                        </div>
+
+                        <!-- Fallback toggle -->
+                        <div class="settings-field">
+                            <div class="settings-toggle-row">
+                                <div>
+                                    <label class="settings-label">
+                                        <i class="fas fa-rotate"></i> Fallback Provider
+                                    </label>
+                                    <p class="settings-desc">
+                                        Jika <strong>ON</strong>: coba provider lain saat provider utama gagal.<br>
+                                        Jika <strong>OFF</strong>: tampilkan error jika provider utama tidak menemukan lirik.
+                                    </p>
+                                </div>
+                                <button id="lyrics-fallback-toggle" class="toggle-btn" type="button" role="switch" aria-checked="true">
+                                    <span class="toggle-knob"></span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Save button -->
+                        <div class="settings-actions">
+                            <button id="settings-save-btn" class="btn-primary" type="button">
+                                <i class="fas fa-check"></i> Simpan
+                            </button>
+                            <span id="settings-save-status" class="settings-save-status"></span>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
         </div>
     </div>
 

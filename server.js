@@ -38,6 +38,37 @@ const PUBLIC_DIR = fs.existsSync(path.join(__dirname, 'public'))
   : __dirname;
 const DL_DIR = path.join(__dirname, 'downloads');
 const PROVIDERS_DIR = path.join(__dirname, 'providers');
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+
+// ─── Settings helpers ───
+const DEFAULT_SETTINGS = {
+  lyrics: {
+    provider: 'apple',
+    fallback: true
+  }
+};
+
+function loadSettings() {
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) {
+      const raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      // Deep merge with defaults so new keys always exist
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        lyrics: { ...DEFAULT_SETTINGS.lyrics, ...(parsed.lyrics || {}) }
+      };
+    }
+  } catch (e) {
+    console.warn('[settings] Failed to load settings.json:', e.message);
+  }
+  return { ...DEFAULT_SETTINGS, lyrics: { ...DEFAULT_SETTINGS.lyrics } };
+}
+
+function saveSettings(settings) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8');
+}
 
 if (!fs.existsSync(DL_DIR)) fs.mkdirSync(DL_DIR, { recursive: true });
 
@@ -122,8 +153,75 @@ function fileMeta(fileName) {
     size: stat.size,
     modifiedAt: stat.mtime.toISOString(),
     downloadUrl: `/downloads/${encodeURIComponent(fileName)}`,
-    streamUrl: `/stream/${encodeURIComponent(fileName)}`
+    streamUrl: `/stream/${encodeURIComponent(fileName)}`,
+    coverUrl: `/api/cover/${encodeURIComponent(fileName)}`
   };
+}
+
+/**
+ * Extract embedded cover art from a FLAC file.
+ * FLAC stores cover art in METADATA_BLOCK_PICTURE blocks.
+ * Returns a Buffer of the image data, or null if not found.
+ */
+function extractFlacCover(filePath) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    // Check fLaC marker
+    const marker = Buffer.alloc(4);
+    fs.readSync(fd, marker, 0, 4, 0);
+    if (marker.toString('ascii') !== 'fLaC') return null;
+
+    let offset = 4;
+    while (true) {
+      const blockHeader = Buffer.alloc(4);
+      const bytesRead = fs.readSync(fd, blockHeader, 0, 4, offset);
+      if (bytesRead < 4) break;
+
+      const isLast   = (blockHeader[0] & 0x80) !== 0;
+      const blockType = blockHeader[0] & 0x7F;
+      const blockLen  = (blockHeader[1] << 16) | (blockHeader[2] << 8) | blockHeader[3];
+
+      offset += 4;
+
+      // Block type 6 = PICTURE
+      if (blockType === 6 && blockLen > 0) {
+        const block = Buffer.alloc(blockLen);
+        fs.readSync(fd, block, 0, blockLen, offset);
+
+        // PICTURE block layout:
+        // 4 bytes: picture type
+        // 4 bytes: mime type length
+        // N bytes: mime type string
+        // 4 bytes: description length
+        // M bytes: description string
+        // 4 bytes: width
+        // 4 bytes: height
+        // 4 bytes: color depth
+        // 4 bytes: color count
+        // 4 bytes: data length
+        // N bytes: image data
+        let pos = 0;
+        const picType = block.readUInt32BE(pos); pos += 4;
+        const mimeLen = block.readUInt32BE(pos); pos += 4;
+        const mime    = block.toString('ascii', pos, pos + mimeLen); pos += mimeLen;
+        const descLen = block.readUInt32BE(pos); pos += 4;
+        pos += descLen; // skip description
+        pos += 16;      // skip width, height, color depth, color count
+        const dataLen = block.readUInt32BE(pos); pos += 4;
+        const imgData = block.slice(pos, pos + dataLen);
+
+        return { data: imgData, mime: mime || 'image/jpeg' };
+      }
+
+      offset += blockLen;
+      if (isLast) break;
+    }
+  } catch (_) {
+    // ignore parse errors
+  } finally {
+    fs.closeSync(fd);
+  }
+  return null;
 }
 
 function streamAudio(req, res, filePath, fileName) {
@@ -625,6 +723,29 @@ const server = http.createServer(async (req, res) => {
     return streamAudio(req, res, path.join(DL_DIR, fileName), fileName);
   }
 
+  // ─── COVER ART ────────────────────────────────────────────────────────────
+  // GET /api/cover/<fileName>  — serves embedded cover art from local FLAC files
+  if (p.startsWith('/api/cover/')) {
+    const fileName = decodeURIComponent(path.basename(p));
+    const filePath = path.join(DL_DIR, fileName);
+    if (!filePath.startsWith(DL_DIR) || !fs.existsSync(filePath)) {
+      res.writeHead(404); return res.end();
+    }
+    const ext = path.extname(fileName).toLowerCase();
+    if (ext === '.flac') {
+      const cover = extractFlacCover(filePath);
+      if (cover) {
+        res.writeHead(200, {
+          'Content-Type': cover.mime,
+          'Content-Length': cover.data.length,
+          'Cache-Control': 'public, max-age=86400'
+        });
+        return res.end(cover.data);
+      }
+    }
+    res.writeHead(404); return res.end();
+  }
+
   if (p.startsWith('/downloads/')) {
     const fileName = decodeURIComponent(path.basename(p));
     return serveFile(res, path.join(DL_DIR, fileName), fileName);
@@ -967,6 +1088,33 @@ const server = http.createServer(async (req, res) => {
 
 
 
+    // ─── SETTINGS ────────────────────────────────────────────────────────────────
+    // GET  /api/settings        — return current settings
+    // POST /api/settings/lyrics — update lyrics settings
+    if (p === '/api/settings' && m === 'GET') {
+      return json(res, loadSettings());
+    }
+
+    if (p === '/api/settings/lyrics' && m === 'POST') {
+      const body = await parseBody(req);
+      const settings = loadSettings();
+      const { DEFAULT_LYRICS_PROVIDERS } = require('./lib/lyrics');
+      const validProviders = DEFAULT_LYRICS_PROVIDERS;
+
+      if (body.provider !== undefined) {
+        if (!validProviders.includes(body.provider)) {
+          return json(res, { error: `Invalid provider. Valid: ${validProviders.join(', ')}` }, 400);
+        }
+        settings.lyrics.provider = body.provider;
+      }
+      if (body.fallback !== undefined) {
+        settings.lyrics.fallback = !!body.fallback;
+      }
+      saveSettings(settings);
+      console.log(`[settings] lyrics updated: provider=${settings.lyrics.provider}, fallback=${settings.lyrics.fallback}`);
+      return json(res, { ok: true, lyrics: settings.lyrics });
+    }
+
     // ─── LYRICS ──────────────────────────────────────────────────────────────────
     // GET /api/lyrics?title=&artist=&album=&duration=&isrc=
     //
@@ -983,6 +1131,23 @@ const server = http.createServer(async (req, res) => {
       if (!title || !artist) return json(res, { error: 'Missing title or artist' }, 400);
       if (!fetchLyricsFromEngine) return json(res, { lyrics: '', provider: '', synced: false });
 
+      // Load settings to determine provider order
+      const settings = loadSettings();
+      const { DEFAULT_LYRICS_PROVIDERS } = require('./lib/lyrics');
+      const primaryProvider = settings.lyrics.provider || 'apple';
+      const useFallback     = settings.lyrics.fallback !== false;
+
+      // Build provider list: primary first, then rest if fallback is ON
+      let providerList;
+      if (useFallback) {
+        // Primary first, then all others (excluding primary to avoid duplicate)
+        const rest = DEFAULT_LYRICS_PROVIDERS.filter(p => p !== primaryProvider);
+        providerList = [primaryProvider, ...rest];
+      } else {
+        // Only use the primary provider — no fallback
+        providerList = [primaryProvider];
+      }
+
       try {
         const { lyrics, provider } = await fetchLyricsFromEngine({
           trackName:  title,
@@ -990,8 +1155,18 @@ const server = http.createServer(async (req, res) => {
           albumName:  album,
           durationS:  duration,
           isrc,
-          providers: ['apple', 'musixmatch', 'lrclib', 'genius', 'netease', 'lyricsovh', 'amazon']
+          providers: providerList
         });
+
+        if (!lyrics && !useFallback) {
+          // Fallback OFF and primary failed — return error
+          return json(res, {
+            lyrics: '',
+            provider: '',
+            synced: false,
+            error: `Lyrics not found via ${primaryProvider}. Fallback is disabled.`
+          });
+        }
 
         // Detect if lyrics are LRC-synced (contain timestamp tags)
         const synced = /\[\d{2}:\d{2}[.:]\d{2}\]/.test(lyrics);
@@ -1086,6 +1261,67 @@ const server = http.createServer(async (req, res) => {
       try {
         const info = await detectAudioInfo(filePath);
         return json(res, info);
+      } catch (err) {
+        return json(res, { error: err.message }, 500);
+      }
+    }
+
+    // ─── AUDIO INFO FULL (Spectrum Analyzer metadata panel) ──────────────────
+    // GET /api/audio-info-full?file=<fileName>
+    // Returns extended metadata for the Audio File Information panel:
+    // type, sampleRate, bitDepth, channels, duration, nyquist, size,
+    // samples, analysisFrames, fftSize, freqResolution
+    if (p === '/api/audio-info-full' && m === 'GET') {
+      const fileName = parsed.searchParams.get('file');
+      if (!fileName) return json(res, { error: 'Missing file param' }, 400);
+
+      const filePath = path.join(DL_DIR, path.basename(fileName));
+      if (!fs.existsSync(filePath)) return json(res, { error: 'File not found' }, 404);
+
+      try {
+        const base = await detectAudioInfo(filePath);
+        const stat  = fs.statSync(filePath);
+        const ext   = path.extname(filePath).toLowerCase().replace('.', '');
+
+        const sampleRate     = base.sampleRate  || 44100;
+        const bitDepth       = base.bitDepth    || 16;
+        const channels       = base.channels    || 2;
+        const fileSizeBytes  = stat.size;
+
+        // Duration: derive from file size for PCM-based formats (FLAC/WAV).
+        // For compressed formats we can only estimate.
+        let durationSec = null;
+        if (ext === 'flac' || ext === 'wav') {
+          // PCM data bytes ≈ sampleRate × channels × (bitDepth/8) × duration
+          const bytesPerSec = sampleRate * channels * (bitDepth / 8);
+          // Subtract rough header overhead (~8 KB for FLAC, 44 bytes for WAV)
+          const headerBytes = ext === 'wav' ? 44 : 8192;
+          const dataBytes   = Math.max(0, fileSizeBytes - headerBytes);
+          durationSec = bytesPerSec > 0 ? dataBytes / bytesPerSec : null;
+        }
+
+        const totalSamples    = durationSec != null ? Math.round(durationSec * sampleRate) : null;
+        const nyquist         = sampleRate / 2;
+        const fftSize         = 2048; // default AnalyserNode fftSize used by frontend
+        const freqResolution  = sampleRate / fftSize;
+        const analysisFrames  = totalSamples != null ? Math.floor(totalSamples / (fftSize / 2)) : null;
+
+        return json(res, {
+          type:            ext.toUpperCase(),
+          sampleRate,
+          bitDepth,
+          channels,
+          durationSec,
+          nyquist,
+          fileSizeBytes,
+          totalSamples,
+          analysisFrames,
+          fftSize,
+          freqResolution,
+          hiRes:           base.hiRes,
+          label:           base.label,
+          format:          base.format
+        });
       } catch (err) {
         return json(res, { error: err.message }, 500);
       }
