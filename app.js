@@ -1322,8 +1322,14 @@
     if (!qProv) { openDownloadModal(track, true, 'Track tidak tersedia di Qobuz.'); return; }
     setPlayerLoading(track, 'Memuat stream Qobuz…');
     try {
-      const quality = qProv.qualities?.[0]?.value || '27';
-      const r = await fetch(`/api/unified-stream-url?provider=qobuz&id=${encodeURIComponent(qProv.trackId)}&quality=${encodeURIComponent(quality)}`);
+      // Get Qobuz settings from SettingsManager
+      const resolvers = SettingsManager.getQobuzResolverPriority();
+      const quality = SettingsManager.getQobuzDefaultQuality() || qProv.qualities?.[0]?.value || '27';
+      
+      // Build URL with resolver priority and quality settings
+      const url = `/api/unified-stream-url?provider=qobuz&id=${encodeURIComponent(qProv.trackId)}&quality=${encodeURIComponent(quality)}&resolvers=${encodeURIComponent(resolvers.join(','))}`;
+      
+      const r = await fetch(url);
       const data = await r.json();
       if (data.error || !data.canStream) throw new Error(data.error || 'Qobuz stream tidak tersedia');
       playInPlayer({ title: track.title, artist: track.artist, album: track.album || '',
@@ -1421,9 +1427,26 @@
     hide(el.providerStep); hide(el.qualityStep); hide(el.doneStep); show(el.progressStep);
     el.dlStatus.textContent = 'Memulai download…'; el.dlPct.textContent = '0%'; el.dlBar.style.width = '0%';
     try {
+      // Gather settings to send to server
+      const settings = {
+        metadata: {
+          primary: SettingsManager.getMetadataSource(),
+          fallback: SettingsManager.shouldUseMetadataFallback(),
+          autoTag: SettingsManager.shouldAutoTag()
+        },
+        lyrics: {
+          providers: SettingsManager.getLyricsProviders()
+        }
+      };
+
       const r = await fetch('/api/download', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: selectedProvider.key, track: payload, quality: selectedQuality })
+        body: JSON.stringify({ 
+          provider: selectedProvider.key, 
+          track: payload, 
+          quality: selectedQuality,
+          settings: settings
+        })
       });
       const d = await r.json();
       if (d.error) throw new Error(d.error);

@@ -94,6 +94,44 @@ class QobuzProvider {
     this.name = 'Qobuz';
     this.appId = '712109809';
     this.secret = '589be88e4538daea11f509d29e4a23b1';
+    this.resolverPriority = null;
+  }
+
+  /**
+   * Set custom resolver priority order
+   * @param {string[]} priority - Array of resolver names (e.g., ['lucida', 'zarz', 'slavart'])
+   */
+  setResolverPriority(priority) {
+    if (!Array.isArray(priority) || priority.length === 0) {
+      this.resolverPriority = null;
+      return;
+    }
+    this.resolverPriority = priority;
+    console.log(`[qobuz] Resolver priority set to: ${priority.join(', ')}`);
+  }
+
+  /**
+   * Reorder APIs based on priority list
+   * @param {Array} apis - Array of API resolver objects
+   * @param {string[]} priority - Priority order array
+   * @returns {Array} Reordered APIs array
+   */
+  _reorderApis(apis, priority) {
+    const apiMap = new Map(apis.map(api => [api.name, api]));
+    const reordered = [];
+    
+    // Add APIs in priority order
+    for (const name of priority) {
+      if (apiMap.has(name)) {
+        reordered.push(apiMap.get(name));
+        apiMap.delete(name);
+      }
+    }
+    
+    // Add remaining APIs not in priority list
+    reordered.push(...apiMap.values());
+    
+    return reordered;
   }
 
   sign(path, params, ts, secret) {
@@ -130,7 +168,12 @@ class QobuzProvider {
   async getStreamUrl(trackId, quality) {
     let lastError = null;
 
-    for (const api of QOBUZ_STREAM_APIS) {
+    // Use custom resolver priority if set, otherwise use default order
+    const apis = this.resolverPriority 
+      ? this._reorderApis(QOBUZ_STREAM_APIS, this.resolverPriority)
+      : QOBUZ_STREAM_APIS;
+
+    for (const api of apis) {
       try {
         console.log(`[qobuz] Trying stream API: ${api.name}`);
         const url = api.buildUrl(trackId, quality);
