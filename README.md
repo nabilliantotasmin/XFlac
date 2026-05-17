@@ -146,6 +146,48 @@ XFlac/
 
 ---
 
+## API Credits
+
+XenoFlac relies on the following third-party APIs and services:
+
+### Music Providers
+| Service | Usage | Endpoint |
+|---------|-------|----------|
+| [Deezer API](https://developers.deezer.com/api) | Track search, artist/album metadata | `api.deezer.com` |
+| [Tidal API](https://developer.tidal.com/) | Track search, artist/album metadata, cover art | `api.tidal.com/v1` |
+| [Amazon Music](https://music.amazon.com) | Track search, artist metadata | `na.mesk.skill.music.a2z.com/api` |
+| [Qobuz](https://www.qobuz.com) | Track search, Hi-Res streaming | `www.qobuz.com/api.json/0.2` |
+| [Pandora](https://www.pandora.com) | Track search, streaming | `api.pandora.com` |
+| [NetEase Cloud Music](https://music.163.com) | Track search (optional) | `music.163.com` |
+
+### Download Resolvers
+| Service | Usage |
+|---------|-------|
+| [Zarz API](https://api.zarz.moe) | Download resolver for Deezer, Amazon, Pandora |
+| [Lucida](https://lucida.to) | Fallback download resolver for Deezer, Amazon |
+| [Slavart](https://slavart.gamesdrive.io) | Fallback download resolver for Deezer, Qobuz, Amazon |
+| [Spotbye](https://spotbye.qzz.io) | Fallback download resolver for Deezer, Qobuz, Amazon |
+| [MusicDL](https://www.musicdl.me) | Fallback download resolver for Deezer, Amazon |
+| [song.link](https://odesli.co) | Cross-platform track URL resolver (Amazon, Pandora) |
+
+### Lyrics
+| Service | Usage | Endpoint |
+|---------|-------|----------|
+| [Paxsenix Lyrics API](https://lyrics.paxsenix.org) | Synced LRC lyrics proxy for Spotify, Apple Music, Musixmatch | `lyrics.paxsenix.org` |
+| [iTunes Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI) | Apple Music track ID lookup | `itunes.apple.com/search` |
+| [LRCLIB](https://lrclib.net) | Synced and plain lyrics | `lrclib.net/api` |
+| [Lyrics.ovh](https://lyrics.ovh) | Plain text lyrics | `api.lyrics.ovh/v1` |
+| [Genius](https://genius.com) | Plain text lyrics (scrape) | `genius.com` |
+
+### Metadata & Tagging
+| Service | Usage | Endpoint |
+|---------|-------|----------|
+| [MusicBrainz](https://musicbrainz.org/doc/MusicBrainz_API) | Track/release metadata enrichment (ISRC, genre, label) | `musicbrainz.org/ws/2` |
+| [iTunes Search API](https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI) | Genre and artwork fallback for tagging | `itunes.apple.com/search` |
+| [Monochrome / Tidal metadata mirrors](https://monochrome.tf) | Tidal track metadata enrichment | `monochrome.tf` and mirrors |
+
+---
+
 ## License
 
 MIT
