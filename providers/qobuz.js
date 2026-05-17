@@ -165,7 +165,7 @@ class QobuzProvider {
     }));
   }
 
-  async getStreamUrl(trackId, quality) {
+  async getStreamUrl(trackId, quality, limitToSetPriority = false) {
     let lastError = null;
 
     // Use custom resolver priority if set, otherwise use default order
@@ -173,7 +173,14 @@ class QobuzProvider {
       ? this._reorderApis(QOBUZ_STREAM_APIS, this.resolverPriority)
       : QOBUZ_STREAM_APIS;
 
-    for (const api of apis) {
+    // If limitToSetPriority is true and a custom priority was set, only try those resolvers
+    let resolversToTry = apis;
+    if (limitToSetPriority && this.resolverPriority) {
+      // Only try resolvers that were explicitly set in the priority list
+      resolversToTry = apis.filter(api => this.resolverPriority.includes(api.name));
+    }
+
+    for (const api of resolversToTry) {
       try {
         console.log(`[qobuz] Trying stream API: ${api.name}`);
         const url = api.buildUrl(trackId, quality);
@@ -247,24 +254,32 @@ class QobuzProvider {
    * ─ STREAMING PATH ────────────────────────────────────────────────────────
    * Returns the raw CDN URL for the browser to stream directly.
    * Rejects sample/preview URLs (30-second clips).
+   * @param {string} trackId - Qobuz track ID
+   * @param {string} quality - Quality level ('6', '7', '27')
+   * @param {boolean} limitToSetPriority - Only use resolvers explicitly set via setResolverPriority (default: false)
    * ─────────────────────────────────────────────────────────────────────────
    */
-  async getStreamUrlOnly(trackId, quality = '6') {
+  async getStreamUrlOnly(trackId, quality = '6', limitToSetPriority = false) {
     // Map quality labels → Qobuz format_id: 27 = Hi-Res Max, 7 = Hi-Res, 6 = CD Quality
     const q = { 'HI_RES_MAX': '27', 'HI_RES': '7', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
-    return this.getStreamUrl(trackId, q);
+    return this.getStreamUrl(trackId, q, limitToSetPriority);
   }
 
   /**
    * ─ DOWNLOAD PATH ─────────────────────────────────────────────────────────
    * Same URL resolution as streaming but writes bytes to disk with progress.
+   * @param {object} track - Track object with id
+   * @param {string} quality - Quality level
+   * @param {string} outputPath - Output file path
+   * @param {function} onProgress - Progress callback
+   * @param {boolean} limitToSetPriority - Only use resolvers explicitly set via setResolverPriority (default: false)
    * ─────────────────────────────────────────────────────────────────────────
    */
-  async download(track, quality, outputPath, onProgress) {
+  async download(track, quality, outputPath, onProgress, limitToSetPriority = false) {
     // Map quality labels → Qobuz format_id: 27 = Hi-Res Max, 7 = Hi-Res, 6 = CD Quality
     const q = { 'HI_RES_MAX': '27', 'HI_RES': '7', 'LOSSLESS': '6', 'HIGH': '6' }[quality] || quality || '6';
 
-    const url = await this.getStreamUrl(track.id, q);
+    const url = await this.getStreamUrl(track.id, q, limitToSetPriority);
 
     // Detect final extension from CDN URL (e.g. .flac, .mp3, .m4a)
     // Qobuz streams are typically FLAC for quality 6/7/27
