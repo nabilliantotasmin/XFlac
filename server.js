@@ -31,6 +31,16 @@ try {
   console.warn('[server] lyrics engine not available:', e.message);
 }
 
+// ─── Settings Registries (single source of truth for UI dropdowns) ───
+let getResolverOptions, getLyricsOptions;
+try {
+  ({ getResolverOptions } = require('./config/qobuzResolvers'));
+  ({ getLyricsOptions }   = require('./config/lyricsProviders'));
+  console.log('[server] settings registries loaded');
+} catch (e) {
+  console.warn('[server] settings registries not available:', e.message);
+}
+
 const PORT = process.env.PORT || 3000;
 // Serve dari folder 'public' kalau ada, fallback ke root folder
 const PUBLIC_DIR = fs.existsSync(path.join(__dirname, 'public'))
@@ -651,6 +661,18 @@ const server = http.createServer(async (req, res) => {
       ]).filter(p => providers[p.key]);
 
       return json(res, { providers: registry });
+    }
+
+    // ─── SETTINGS OPTIONS ────────────────────────────────────────────────
+    // GET /api/settings/options
+    // Returns the catalog of available APIs for the Settings UI dropdowns.
+    // Sourced from config/qobuzResolvers.js and config/lyricsProviders.js
+    // — adding/removing entries there automatically updates the UI.
+    if (p === '/api/settings/options' && m === 'GET') {
+      return json(res, {
+        qobuzResolvers:  getResolverOptions ? getResolverOptions() : [],
+        lyricsProviders: getLyricsOptions   ? getLyricsOptions()   : []
+      });
     }
 
     if (p === '/api/library' && m === 'GET') {

@@ -37,10 +37,57 @@
 
   const SettingsManager = {
     settings: null,
+    options: { qobuzResolvers: [], lyricsProviders: [] },
 
     init() {
       this.load();
       this.bindEvents();
+      this.fetchOptions(); // async — populates dropdowns when ready
+    },
+
+    /**
+     * Fetch the catalog of available APIs from the server.
+     * Single source of truth = config/qobuzResolvers.js + config/lyricsProviders.js
+     * UI dropdowns are populated from this response.
+     */
+    async fetchOptions() {
+      try {
+        const r = await fetch('/api/settings/options');
+        const data = await r.json();
+        this.options.qobuzResolvers  = data.qobuzResolvers  || [];
+        this.options.lyricsProviders = data.lyricsProviders || [];
+        this.populateDropdowns();
+        console.log('[settings] Options loaded:', this.options);
+      } catch (e) {
+        console.warn('[settings] Failed to fetch options:', e.message);
+      }
+    },
+
+    /**
+     * Populate the <select> dropdowns from the fetched options.
+     * Re-runs on every modal open so that newly added entries in
+     * the config files appear without a page reload.
+     */
+    populateDropdowns() {
+      const lyricsSel = $('lyrics-primary');
+      if (lyricsSel && this.options.lyricsProviders.length) {
+        const current = this.get('lyrics', 'primary') || this.options.lyricsProviders[0]?.key;
+        lyricsSel.innerHTML = this.options.lyricsProviders.map(o => {
+          const text = o.hint ? `${o.label} (${o.hint})` : o.label;
+          return `<option value="${o.key}">${text}</option>`;
+        }).join('');
+        if (current) lyricsSel.value = current;
+      }
+
+      const resolverSel = $('qobuz-resolver');
+      if (resolverSel && this.options.qobuzResolvers.length) {
+        const current = this.get('streaming', 'qobuzResolver') || this.options.qobuzResolvers[0]?.key;
+        resolverSel.innerHTML = this.options.qobuzResolvers.map(o => {
+          const text = o.hint ? `${o.label} (${o.hint})` : o.label;
+          return `<option value="${o.key}">${text}</option>`;
+        }).join('');
+        if (current) resolverSel.value = current;
+      }
     },
 
     load() {
@@ -141,6 +188,7 @@
     openModal() {
       const modal = $('settings-modal');
       if (!modal) return;
+      this.populateDropdowns(); // refresh in case config changed
       this.populateUI();
       modal.classList.remove('hidden');
     },
@@ -235,14 +283,17 @@
     getLyricsProviders() {
       const primary = this.get('lyrics', 'primary') || 'lrclib';
       const fallback = this.get('lyrics', 'fallback') !== false;
-      
-      // Updated list to match new lyrics providers in lib/lyrics.js
-      const allProviders = ['lrclib', 'spotify', 'musixmatch', 'netease', 'genius', 'tekstowo', 'azlyrics'];
-      
+
+      // Provider list comes from server (config/lyricsProviders.js).
+      // Fallback to hardcoded list only if server hasn't responded yet.
+      const allProviders = this.options.lyricsProviders.length
+        ? this.options.lyricsProviders.map(o => o.key)
+        : ['lrclib', 'spotify', 'musixmatch', 'netease', 'genius', 'tekstowo', 'azlyrics'];
+
       if (!fallback) {
         return [primary];
       }
-      
+
       // Primary first, then others
       return [primary, ...allProviders.filter(p => p !== primary)];
     },
@@ -262,14 +313,17 @@
     getQobuzResolverPriority() {
       const primary = this.get('streaming', 'qobuzResolver') || 'zarz';
       const fallback = this.get('streaming', 'qobuzFallback') !== false;
-      
-      // Updated list to match all 10 resolvers in providers/qobuz.js
-      const allResolvers = ['zarz', 'lucida', 'slavart', 'squid', 'doubledouble', 'qqdl', 'musicdl', 'freemp3', 'spotbye', 'orion'];
-      
+
+      // Resolver list comes from server (config/qobuzResolvers.js).
+      // Fallback to hardcoded list only if server hasn't responded yet.
+      const allResolvers = this.options.qobuzResolvers.length
+        ? this.options.qobuzResolvers.map(o => o.key)
+        : ['zarz', 'lucida', 'slavart', 'squid', 'doubledouble', 'qqdl', 'musicdl', 'freemp3', 'spotbye', 'orion'];
+
       if (!fallback) {
         return [primary];
       }
-      
+
       // Primary first, then others
       return [primary, ...allResolvers.filter(r => r !== primary)];
     },
